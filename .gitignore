@@ -1,0 +1,23 @@
+# Python virtual environment
+# This folder is huge and specific to your machine
+venv/
+
+# Downloaded AI models
+# These are large and can be re-downloaded
+*.pt
+*.pth
+
+# Your trained model files
+# You'll upload the final one as a 'release', not in the repo
+models/*.h5
+
+# Your private, large datasets
+# This is critical for privacy and to keep the repo small
+data/
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# VS Code settings
+.vscode/

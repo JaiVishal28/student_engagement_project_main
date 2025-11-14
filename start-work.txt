@@ -1,0 +1,11 @@
+From now on, when you want to work on your project:
+
+Open the Student_Engagement_Project folder in VS Code.
+
+Open a new terminal (Terminal > New Terminal).
+
+Activate your environment: .\venv\Scripts\activate.
+
+Open main.py and start coding!
+
+To run your code, just type python main.py in the activated terminal.
