@@ -4,7 +4,7 @@ Open the Student_Engagement_Project folder in VS Code.
 
 Open a new terminal (Terminal > New Terminal).
 
-Activate your environment: .\venv\Scripts\activate.
+Activate your environment: .\venv\Scripts\activate
 
 Open main.py and start coding!
 
