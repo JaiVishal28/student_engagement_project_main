@@ -122,6 +122,34 @@ def run_video_mode(source=None, display=True, max_frames=None):
                 
             h, w = frame.shape[:2]
             display_frame = frame.copy() if display else None
+            
+            # During enrollment, show info screen instead of processing video
+            if use_audio and not enrollment_complete:
+                if display_frame is not None:
+                    # Create enrollment info overlay
+                    overlay = np.zeros_like(display_frame)
+                    enrollment_pct = (enrollment_counter / 20) * 100
+                    cv2.putText(overlay, "TEACHER VOICE ENROLLMENT", 
+                               (w//2 - 250, h//2 - 80), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 165, 255), 3)
+                    cv2.putText(overlay, f"Progress: {enrollment_pct:.0f}%", 
+                               (w//2 - 150, h//2), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+                    cv2.putText(overlay, "Please speak clearly for 10 seconds", 
+                               (w//2 - 300, h//2 + 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                    cv2.putText(overlay, "(Stay alone, no background noise)", 
+                               (w//2 - 280, h//2 + 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 1)
+                    display_frame = cv2.addWeighted(display_frame, 0.3, overlay, 0.7, 0)
+                
+                # Show enrollment screen and skip visual processing
+                if display and display_frame is not None:
+                    cv2.imshow("Student Engagement", display_frame)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        logger.info("User requested quit during enrollment")
+                        break
+                
+                # Continue to next frame (skip visual detection during enrollment)
+                frame_counter += 1
+                continue
+            
             frame_counter += 1
             fps_counter += 1
             
@@ -278,34 +306,27 @@ def run_video_mode(source=None, display=True, max_frames=None):
                 cv2.putText(display_frame, f"Tracks: {len(tracks)}", 
                            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 
-                # Audio status overlay
-                if use_audio and current_audio_features:
-                    # Show enrollment status or audio metrics
-                    if not enrollment_complete:
-                        enrollment_pct = (enrollment_counter / 20) * 100
-                        status_text = f"ENROLLING: {enrollment_pct:.0f}% - Teacher speak now!"
-                        cv2.putText(display_frame, status_text, 
-                                   (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                # Audio status overlay (only show if enrollment complete)
+                if use_audio and current_audio_features and enrollment_complete:
+                    # Standard audio metrics
+                    noise_level = current_audio_features.get('background_noise_level', 0.0)
+                    audio_status = f"Audio Noise: {noise_level:.2f}"
+                    cv2.putText(display_frame, audio_status, 
+                               (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 200), 1)
+                    
+                    # Student noise detection
+                    student_noise = current_audio_features.get('student_noise_detected', False)
+                    student_level = current_audio_features.get('student_noise_level', 0.0)
+                    is_teacher = current_audio_features.get('is_teacher_speaking', False)
+                    
+                    if student_noise:
+                        student_text = f"STUDENT NOISE: {student_level:.2f}"
+                        cv2.putText(display_frame, student_text, 
+                                   (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
                     else:
-                        # Standard audio metrics
-                        noise_level = current_audio_features.get('background_noise_level', 0.0)
-                        audio_status = f"Audio Noise: {noise_level:.2f}"
-                        cv2.putText(display_frame, audio_status, 
-                                   (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 200), 1)
-                        
-                        # Student noise detection
-                        student_noise = current_audio_features.get('student_noise_detected', False)
-                        student_level = current_audio_features.get('student_noise_level', 0.0)
-                        is_teacher = current_audio_features.get('is_teacher_speaking', False)
-                        
-                        if student_noise:
-                            student_text = f"STUDENT NOISE: {student_level:.2f}"
-                            cv2.putText(display_frame, student_text, 
-                                       (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-                        else:
-                            teacher_text = "Teacher Only" if is_teacher else "Quiet"
-                            cv2.putText(display_frame, teacher_text, 
-                                       (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                        teacher_text = "Teacher Only" if is_teacher else "Quiet"
+                        cv2.putText(display_frame, teacher_text, 
+                                   (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
                 
                 cv2.imshow("Student Engagement", display_frame)
