@@ -209,7 +209,7 @@ def run_video_mode(source=None, display=True, max_frames=None):
                 xmin, ymin, xmax, ymax, tid = t
                 xmin, ymin, xmax, ymax = int(xmin), int(ymin), int(xmax), int(ymax)
                 bbox = [xmin, ymin, xmax, ymax]
-                logger.info(f"LOGGING TRACK {tid} AT FRAME {frame_counter}")
+                logger.debug(f"Logging track {tid} at frame {frame_counter}")
 
                 # Compute visual features
                 try:
@@ -279,7 +279,7 @@ def run_video_mode(source=None, display=True, max_frames=None):
                     "audio_engagement_score": current_audio_features.get('audio_engagement_score', 0.0),
                 }
                 rows_to_log.append(log_entry)
-                logger.info(f"ROW CREATED FOR TRACK {tid}")
+                logger.debug(f"Row created for track {tid}")
 
             
             # Log data

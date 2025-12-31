@@ -11,9 +11,9 @@ detection:
   device: "cpu"
 
 tracking:
-  max_age: 30
-  min_hits: 3
-  iou_threshold: 0.3
+  max_age: 90        # Keep lost tracks for 90 frames (~6 seconds at 15fps)
+  min_hits: 5        # Require 5 consecutive detections to reduce false positives
+  iou_threshold: 0.25  # Lower threshold = more lenient matching (was 0.3)
 
 processing:
   process_every_n_frames: 3

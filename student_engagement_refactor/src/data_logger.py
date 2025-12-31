@@ -96,7 +96,7 @@ class DataLogger:
                 os.fsync(f.fileno())
 
             self.log_count += len(rows)
-            logger.info(f"Logged {len(rows)} rows (total so far: {self.log_count})")
+            logger.debug(f"Logged {len(rows)} rows (total: {self.log_count})")
 
         except Exception as e:
             logger.error(f"Error logging data: {e}", exc_info=True)
