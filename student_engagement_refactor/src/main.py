@@ -306,14 +306,14 @@ def run_video_mode(source=None, display=True, max_frames=None):
                 # Audio status overlay (only show if enrollment complete)
                 if use_audio and current_audio_features and enrollment_complete:
                     # Standard audio metrics
-                    noise_level = current_audio_features.get('background_noise_level', 0.0)
+                    noise_level = float(current_audio_features.get('background_noise_level') or 0.0)
                     audio_status = f"Audio Noise: {noise_level:.2f}"
                     cv2.putText(display_frame, audio_status, 
                                (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 200), 1)
                     
                     # Student noise detection
                     student_noise = current_audio_features.get('student_noise_detected', False)
-                    student_level = current_audio_features.get('student_noise_level', 0.0)
+                    student_level = float(current_audio_features.get('student_noise_level') or 0.0)
                     is_teacher = current_audio_features.get('is_teacher_speaking', False)
                     
                     if student_noise:
