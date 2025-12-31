@@ -69,12 +69,16 @@ def run_video_mode(source=None, display=True, max_frames=None):
             iou_threshold=track_cfg.get("iou_threshold", 0.3)
         )
         
-        datalog = DataLogger(csv_path=log_cfg.get("csv_path", "data/labels/engagement_data.csv"))
+        csv_path = BASE_DIR / "data" / "labels" / "engagement_data.csv"
+        datalog = DataLogger(csv_path=str(csv_path))
+
 
         process_every_n = proc_cfg.get("process_every_n_frames", 3)
         frame_counter = 0
-        last_features = {}  # track_id -> last features
-        movement_buffer = {}  # track_id -> small buffer of center positions
+        last_features = {}# track_id -> last features
+        movement_buffer = {}# track_id -> small buffer of center positions
+        last_detections = []   # ✅ ADD THIS
+
         
         fps_time = time.time()
         fps_counter = 0
@@ -101,13 +105,18 @@ def run_video_mode(source=None, display=True, max_frames=None):
                 break
 
             # Run detection every N frames
-            detections = []
+           # Always keep last detections
+# Run detection every N frames
             if frame_counter % process_every_n == 0:
+                last_detections = []
                 dets = detector.detect(frame)
                 for d in dets:
-                    # Keep only persons (YOLO class 0)
                     if d.get("cls", 0) == 0:
-                        detections.append([d['xmin'], d['ymin'], d['xmax'], d['ymax']])
+                        last_detections.append([d['xmin'], d['ymin'], d['xmax'], d['ymax']])
+
+            detections = last_detections
+
+
             
             # Update tracker
             tracks = tracker.update(detections)
@@ -118,6 +127,7 @@ def run_video_mode(source=None, display=True, max_frames=None):
                 xmin, ymin, xmax, ymax, tid = t
                 xmin, ymin, xmax, ymax = int(xmin), int(ymin), int(xmax), int(ymax)
                 bbox = [xmin, ymin, xmax, ymax]
+                logger.info(f"LOGGING TRACK {tid} AT FRAME {frame_counter}")
 
                 # Compute visual features
                 try:
@@ -177,10 +187,15 @@ def run_video_mode(source=None, display=True, max_frames=None):
                     "bbox_xmax": xmax,
                     "bbox_ymax": ymax
                 })
+                logger.info(f"ROW CREATED FOR TRACK {tid}")
+
             
             # Log data
-            if rows_to_log:
-                datalog.log(rows_to_log)
+            # if rows_to_log:
+            #     datalog.log(rows_to_log)
+            for row in rows_to_log:
+                datalog.log([row])
+
 
             # Display frame
             if display and display_frame is not None:
@@ -216,7 +231,10 @@ def run_video_mode(source=None, display=True, max_frames=None):
             cam.release()
         if display:
             cv2.destroyAllWindows()
-        
+        # Force one final write if any data was seen
+        if 'datalog' in locals() and datalog.log_count == 0:
+            logger.warning("No engagement rows were logged during session")
+
         # Print summary
         if 'datalog' in locals():
             summary = datalog.get_summary()

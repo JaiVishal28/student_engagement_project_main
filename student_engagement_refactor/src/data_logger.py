@@ -21,10 +21,15 @@ class DataLogger:
         Args:
             csv_path: Path to output CSV file
         """
+        
+
         self.csv_path = csv_path
+        logger.info(f"CSV absolute path: {os.path.abspath(self.csv_path)}")
         os.makedirs(os.path.dirname(csv_path), exist_ok=True)
         self._ensure_header()
         self.log_count = 0
+        self.student_ids = set()
+        self.engagement_sum = 0.0 # For mean calculation
 
     def _ensure_header(self):
         """Create CSV file with header if it doesn't exist."""
@@ -42,19 +47,22 @@ class DataLogger:
     def log(self, rows: List[Dict[str, Any]]):
         """
         Log engagement data rows to CSV.
-        
+
         Args:
             rows: List of dictionaries with engagement data
         """
         if not rows:
             return
-        
+
         try:
             with open(self.csv_path, 'a', newline='') as f:
                 writer = csv.writer(f)
-                timestamp = datetime.datetime.now().isoformat()
-                
+
                 for r in rows:
+                    timestamp = datetime.datetime.now().isoformat()
+                    self.student_ids.add(r.get('student_id'))
+                    self.engagement_sum += float(r.get('engagement_score', 0.0))
+
                     writer.writerow([
                         timestamp,
                         r.get('student_id', 'unknown'),
@@ -69,31 +77,81 @@ class DataLogger:
                         r.get('bbox_xmax', 0),
                         r.get('bbox_ymax', 0),
                     ])
-            
-            self.log_count += len(rows)
-            logger.debug(f"Logged {len(rows)} rows (total: {self.log_count})")
-        
-        except Exception as e:
-            logger.error(f"Error logging data: {e}")
 
-    def get_summary(self) -> Dict[str, Any]:
-        """
-        Get summary statistics of logged data.
-        
-        Returns:
-            Dictionary with summary statistics
-        """
-        try:
-            import pandas as pd
-            df = pd.read_csv(self.csv_path)
-            
-            return {
-                'total_records': len(df),
-                'unique_students': df['student_id'].nunique(),
-                'mean_engagement': df['engagement_score'].mean(),
-                'std_engagement': df['engagement_score'].std(),
-                'log_file': self.csv_path
-            }
+                # 🔥 CRITICAL FOR WINDOWS: force write to disk
+                f.flush()
+                os.fsync(f.fileno())
+
+            self.log_count += len(rows)
+            logger.info(f"Logged {len(rows)} rows (total so far: {self.log_count})")
+
         except Exception as e:
-            logger.error(f"Error getting summary: {e}")
-            return {'error': str(e)}
+            logger.error(f"Error logging data: {e}", exc_info=True)
+
+    def get_summary(self):
+        mean_engagement = (
+            self.engagement_sum / self.log_count
+            if self.log_count > 0 else 0.0
+        )
+
+        return {
+            'total_records': self.log_count,
+            'unique_students': len(self.student_ids),
+            'mean_engagement': mean_engagement,
+            'log_file': self.csv_path
+        }
+
+      
+    # def get_summary(self):
+    #     try:
+    #         import pandas as pd
+    #         df = pd.read_csv(self.csv_path)
+
+    #         if df.empty or 'engagement_score' not in df.columns:
+    #             return {
+    #                 'total_records': 0,
+    #                 'unique_students': 0,
+    #                 'mean_engagement': 0.0,
+    #                 'std_engagement': 0.0,
+    #                 'log_file': self.csv_path
+    #             }
+
+    #         return {
+    #             'total_records': len(df),
+    #             'unique_students': df['student_id'].nunique(),
+    #             'mean_engagement': float(df['engagement_score'].mean()),
+    #             'std_engagement': float(df['engagement_score'].std()),
+    #             'log_file': self.csv_path
+    #         }
+    #     except Exception as e:
+    #         logger.error(f"Error getting summary: {e}")
+    #         return {
+    #             'total_records': 0,
+    #             'unique_students': 0,
+    #             'mean_engagement': 0.0,
+    #             'std_engagement': 0.0,
+    #             'log_file': self.csv_path
+    #         }
+
+
+    # def get_summary(self) -> Dict[str, Any]:
+    #     """
+    #     Get summary statistics of logged data.
+        
+    #     Returns:
+    #         Dictionary with summary statistics
+    #     """
+    #     try:
+    #         import pandas as pd
+    #         df = pd.read_csv(self.csv_path)
+            
+    #         return {
+    #             'total_records': len(df),
+    #             'unique_students': df['student_id'].nunique(),
+    #             'mean_engagement': df['engagement_score'].mean(),
+    #             'std_engagement': df['engagement_score'].std(),
+    #             'log_file': self.csv_path
+    #         }
+    #     except Exception as e:
+    #         logger.error(f"Error getting summary: {e}")
+    #         return {'error': str(e)}
