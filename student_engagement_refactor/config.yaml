@@ -22,3 +22,19 @@ processing:
 
 logging:
   csv_path: "data/labels/engagement_data.csv"
+  enable_audio: true
+
+audio:
+  sample_rate: 16000
+  chunk_duration: 0.5
+  vad_threshold: 0.5
+  baseline_duration: 5.0
+  noise_threshold: 0.03
+  enable_audio: true
+
+audio:
+  sample_rate: 16000
+  chunk_duration: 0.5
+  vad_threshold: 0.5
+  baseline_duration: 5.0  # seconds to establish teacher voice baseline
+  noise_threshold: 0.03

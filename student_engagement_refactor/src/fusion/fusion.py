@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 def normalize(x, minv, maxv):
     """Normalize value to [0, 1] range."""
@@ -102,3 +102,49 @@ def compute_engagement_score(features: Dict[str, Any], method: str = 'weighted')
     else:
         # Default to weighted
         return simple_engagement_score(features)
+
+
+def multimodal_engagement_score(visual_features: Dict[str, Any], 
+                                 audio_features: Optional[Dict[str, Any]] = None,
+                                 visual_weight: float = 0.65,
+                                 audio_weight: float = 0.35) -> float:
+    """
+    Compute multimodal engagement score from visual and audio features.
+    
+    Args:
+        visual_features: Visual feature dictionary (gaze, eyes, etc.)
+        audio_features: Audio feature dictionary (noise, speech, etc.)
+        visual_weight: Weight for visual features (default 0.65)
+        audio_weight: Weight for audio features (default 0.35)
+    
+    Returns:
+        Combined engagement score [0, 1]
+    """
+    # Get visual engagement score
+    visual_score = simple_engagement_score(visual_features)
+    
+    # If no audio features, return visual only
+    if audio_features is None or not audio_features:
+        return visual_score
+    
+    # Get audio engagement score
+    audio_score = audio_features.get('audio_engagement_score', 0.7)
+    
+    # Weighted fusion
+    combined_score = (visual_weight * visual_score) + (audio_weight * audio_score)
+    
+    # Apply audio modulation factors
+    # Penalize if multiple speakers detected (side conversations)
+    if audio_features.get('multiple_speakers_detected', False):
+        combined_score *= 0.85  # Reduce by 15%
+    
+    # Penalize excessive noise
+    if audio_features.get('excessive_noise', False):
+        combined_score *= 0.90  # Reduce by 10%
+    
+    # Bonus for attentive environment (low noise, single speaker)
+    if audio_features.get('background_noise_level') == 'low' and \
+       audio_features.get('speaker_count', 1) == 1:
+        combined_score = min(1.0, combined_score * 1.1)  # Boost by 10%
+    
+    return max(0.0, min(1.0, combined_score))

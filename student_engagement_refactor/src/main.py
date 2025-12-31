@@ -11,7 +11,8 @@ from src.capture import Camera
 from src.detection.yolov_wrapper import YoloDetector
 from src.tracking.sort_tracker import Sort
 from src.features.visual_features import extract_all
-from src.fusion.fusion import simple_engagement_score
+from src.fusion.fusion import simple_engagement_score, multimodal_engagement_score
+from src.audio import AudioCapture, VADDetector, AudioFeatureExtractor
 
 logger = get_logger("Main")
 
@@ -72,6 +73,26 @@ def run_video_mode(source=None, display=True, max_frames=None):
         csv_path = BASE_DIR / "data" / "labels" / "engagement_data.csv"
         datalog = DataLogger(csv_path=str(csv_path))
 
+        # Initialize audio processing
+        use_audio = log_cfg.get("enable_audio", True)
+        audio_capture = None
+        vad_detector = None
+        audio_extractor = None
+        current_audio_features = {}
+        baseline_counter = 0
+        
+        if use_audio:
+            try:
+                audio_capture = AudioCapture(sample_rate=16000, chunk_duration=0.5)
+                vad_detector = VADDetector(threshold=0.5, sample_rate=16000)
+                audio_extractor = AudioFeatureExtractor(baseline_duration=5.0)
+                audio_capture.start()
+                logger.info("Audio processing enabled - establishing baseline...")
+            except Exception as e:
+                logger.warning(f"Failed to initialize audio: {e}")
+                logger.info("Continuing with visual-only mode")
+                use_audio = False
+
 
         process_every_n = proc_cfg.get("process_every_n_frames", 3)
         frame_counter = 0
@@ -116,6 +137,29 @@ def run_video_mode(source=None, display=True, max_frames=None):
 
             detections = last_detections
 
+            # Process audio chunk
+            if use_audio and audio_capture and audio_capture.is_running():
+                audio_chunk_data = audio_capture.get_audio_chunk(timeout=0.01)
+                if audio_chunk_data:
+                    audio_data = audio_chunk_data['data']
+                    
+                    # Establish baseline in first 10 seconds (~20 chunks)
+                    if baseline_counter < 20:
+                        audio_extractor.update_baseline(audio_data)
+                        baseline_counter += 1
+                        if baseline_counter == 20:
+                            logger.info("Audio baseline established")
+                    
+                    # Detect speech and estimate speakers
+                    speech_prob = vad_detector.detect_speech(audio_data, return_confidence=True)
+                    speaker_count = vad_detector.count_speakers_estimate(audio_data)
+                    
+                    # Extract audio features
+                    current_audio_features = audio_extractor.extract_features(
+                        audio_data,
+                        vad_result=speech_prob,
+                        speaker_count=speaker_count
+                    )
 
             
             # Update tracker
@@ -153,8 +197,11 @@ def run_video_mode(source=None, display=True, max_frames=None):
 
                 feats['movement'] = movement
 
-                # Compute engagement score
-                score = simple_engagement_score(feats)
+                # Compute engagement score (multimodal if audio available)
+                if use_audio and current_audio_features:
+                    score = multimodal_engagement_score(feats, current_audio_features)
+                else:
+                    score = simple_engagement_score(feats)
 
                 # Visualization
                 if display and display_frame is not None:
@@ -174,7 +221,7 @@ def run_video_mode(source=None, display=True, max_frames=None):
                                0.4, (200, 200, 0), 1)
 
                 # Prepare log entry
-                rows_to_log.append({
+                log_entry = {
                     "student_id": int(tid),
                     "engagement_score": float(score),
                     "gaze": feats.get('gaze'),
@@ -185,8 +232,15 @@ def run_video_mode(source=None, display=True, max_frames=None):
                     "bbox_xmin": xmin,
                     "bbox_ymin": ymin,
                     "bbox_xmax": xmax,
-                    "bbox_ymax": ymax
-                })
+                    "bbox_ymax": ymax,
+                    # Audio features
+                    "audio_energy": current_audio_features.get('audio_energy', 0.0),
+                    "speech_probability": current_audio_features.get('speech_probability', 0.0),
+                    "speaker_count": current_audio_features.get('speaker_count', 0),
+                    "background_noise_level": current_audio_features.get('background_noise_level', 'unknown'),
+                    "audio_engagement_score": current_audio_features.get('audio_engagement_score', 0.0),
+                }
+                rows_to_log.append(log_entry)
                 logger.info(f"ROW CREATED FOR TRACK {tid}")
 
             
@@ -211,6 +265,15 @@ def run_video_mode(source=None, display=True, max_frames=None):
                 cv2.putText(display_frame, f"Tracks: {len(tracks)}", 
                            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 
+                # Audio status overlay
+                if use_audio and current_audio_features:
+                    audio_status = f"Audio: {current_audio_features.get('background_noise_level', 'N/A')}"
+                    speaker_info = f"Speakers: {current_audio_features.get('speaker_count', 0)}"
+                    cv2.putText(display_frame, audio_status, 
+                               (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 200), 1)
+                    cv2.putText(display_frame, speaker_info, 
+                               (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 200), 1)
+                
                 cv2.imshow("Student Engagement", display_frame)
                 key = cv2.waitKey(1) & 0xFF
                 
@@ -227,6 +290,11 @@ def run_video_mode(source=None, display=True, max_frames=None):
     except Exception as e:
         logger.error(f"Error in video mode: {e}", exc_info=True)
     finally:
+        # Cleanup resources
+        if 'audio_capture' in locals() and audio_capture:
+            audio_capture.cleanup()
+            logger.info("Audio capture cleaned up")
+        
         if 'cam' in locals():
             cam.release()
         if display:
