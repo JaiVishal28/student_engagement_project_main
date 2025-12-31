@@ -88,7 +88,7 @@ def run_video_mode(source=None, display=True, max_frames=None):
             try:
                 audio_capture = AudioCapture(sample_rate=16000, chunk_duration=0.5)
                 vad_detector = VADDetector(threshold=0.5, sample_rate=16000)
-                audio_extractor = AudioFeatureExtractor(baseline_duration=5.0)
+                audio_extractor = AudioFeatureExtractor(baseline_duration=5.0, sample_rate=16000)
                 speaker_enrollment = SpeakerEnrollment(enrollment_duration=10.0, similarity_threshold=0.55)
                 audio_capture.start()
                 logger.info("🎤 Audio processing enabled")

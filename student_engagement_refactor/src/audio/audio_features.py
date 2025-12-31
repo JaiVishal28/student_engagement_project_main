@@ -11,16 +11,18 @@ class AudioFeatureExtractor:
     Focuses on detecting student activity vs teacher monologue.
     """
     
-    def __init__(self, baseline_duration=5.0, noise_threshold=0.03):
+    def __init__(self, baseline_duration=5.0, noise_threshold=0.03, sample_rate=16000):
         """
         Initialize audio feature extractor.
         
         Args:
             baseline_duration: Seconds of audio to establish baseline (teacher voice)
             noise_threshold: Energy threshold for background noise
+            sample_rate: Audio sample rate (default 16000 Hz)
         """
         self.baseline_duration = baseline_duration
         self.noise_threshold = noise_threshold
+        self.sample_rate = sample_rate
         
         # Baseline tracking (first few seconds assumed to be teacher only)
         self.baseline_energy = []
