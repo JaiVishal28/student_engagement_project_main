@@ -254,7 +254,7 @@ class SpeakerEnrollment:
             if energy_ratio > 1.5:  # 50% more energy than teacher alone
                 # Extra noise on top of teacher
                 noise_level = min(1.0, (energy_ratio - 1.0) / 2.0)  # Scale excess energy
-                student_noise_detected = noise_level > 0.2
+                student_noise_detected = noise_level > 0.4  # Increased threshold from 0.2
             else:
                 noise_level = 0.0
                 student_noise_detected = False
@@ -263,7 +263,7 @@ class SpeakerEnrollment:
             # Map dissimilarity to noise level
             dissimilarity = 1.0 - teacher_similarity
             noise_level = min(1.0, dissimilarity * 1.5)  # Amplify for sensitivity
-            student_noise_detected = noise_level > 0.3
+            student_noise_detected = noise_level > 0.5  # Increased threshold from 0.3
         
         return {
             'student_noise_detected': student_noise_detected,

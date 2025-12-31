@@ -236,10 +236,23 @@ def run_video_mode(source=None, display=True, max_frames=None):
                 feats['movement'] = movement
 
                 # Compute engagement score (multimodal if audio available)
+                # Print detailed breakdown every 30 frames (~2 seconds)
+                show_breakdown = (frame_counter % 30 == 0)
+                
                 if use_audio and current_audio_features:
-                    score = multimodal_engagement_score(feats, current_audio_features)
+                    score = multimodal_engagement_score(feats, current_audio_features, verbose=show_breakdown)
                 else:
                     score = simple_engagement_score(feats)
+                    if show_breakdown:
+                        breakdown = feats.get('_score_breakdown', {})
+                        print(f"\n📊 Engagement Score Breakdown (Frame {frame_counter}):")
+                        print(f"  Gaze (40%):     {breakdown.get('gaze', 0):.3f}")
+                        print(f"  Eyes (25%):     {breakdown.get('eye', 0):.3f}")
+                        print(f"  Mouth (5%):     {breakdown.get('mouth', 0):.3f}")
+                        print(f"  Head (20%):     {breakdown.get('head', 0):.3f}")
+                        print(f"  Movement (10%): {breakdown.get('movement', 0):.3f}")
+                        print(f"  ──────────────")
+                        print(f"  TOTAL:          {score:.3f}")
 
                 # Visualization
                 if display and display_frame is not None:
