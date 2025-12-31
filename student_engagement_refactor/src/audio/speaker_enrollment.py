@@ -44,10 +44,13 @@ class SpeakerEnrollment:
         Args:
             audio_chunk: Audio data (numpy array)
             sample_rate: Sample rate of audio
+            
+        Returns:
+            True if enrollment is complete, False otherwise
         """
         if self.is_enrolled:
             logger.warning("Already enrolled, ignoring new sample")
-            return
+            return True
         
         # Extract spectral features
         features = self._extract_spectral_features(audio_chunk, sample_rate)
@@ -58,6 +61,9 @@ class SpeakerEnrollment:
         # Check if we have enough samples
         if len(self.enrollment_samples) >= self.max_enrollment_samples:
             self._finalize_enrollment()
+            return True
+        
+        return False
     
     def _extract_spectral_features(self, audio_chunk, sample_rate):
         """
