@@ -89,7 +89,7 @@ def run_video_mode(source=None, display=True, max_frames=None):
                 audio_capture = AudioCapture(sample_rate=16000, chunk_duration=0.5)
                 vad_detector = VADDetector(threshold=0.5, sample_rate=16000)
                 audio_extractor = AudioFeatureExtractor(baseline_duration=5.0)
-                speaker_enrollment = SpeakerEnrollment(enrollment_duration=10.0, similarity_threshold=0.75)
+                speaker_enrollment = SpeakerEnrollment(enrollment_duration=10.0, similarity_threshold=0.65)
                 audio_capture.start()
                 logger.info("🎤 Audio processing enabled")
                 logger.info("📝 TEACHER ENROLLMENT: Please speak for 10 seconds to record your voice profile...")
@@ -236,8 +236,8 @@ def run_video_mode(source=None, display=True, max_frames=None):
                 feats['movement'] = movement
 
                 # Compute engagement score (multimodal if audio available)
-                # Print detailed breakdown every 30 frames (~2 seconds)
-                show_breakdown = (frame_counter % 30 == 0)
+                # Print detailed breakdown every 60 frames (~4 seconds)
+                show_breakdown = (frame_counter % 60 == 0)
                 
                 if use_audio and current_audio_features:
                     score = multimodal_engagement_score(feats, current_audio_features, verbose=show_breakdown)
@@ -245,12 +245,12 @@ def run_video_mode(source=None, display=True, max_frames=None):
                     score = simple_engagement_score(feats)
                     if show_breakdown:
                         breakdown = feats.get('_score_breakdown', {})
-                        print(f"\n📊 Engagement Score Breakdown (Frame {frame_counter}):")
-                        print(f"  Gaze (40%):     {breakdown.get('gaze', 0):.3f}")
-                        print(f"  Eyes (25%):     {breakdown.get('eye', 0):.3f}")
-                        print(f"  Mouth (5%):     {breakdown.get('mouth', 0):.3f}")
-                        print(f"  Head (20%):     {breakdown.get('head', 0):.3f}")
-                        print(f"  Movement (10%): {breakdown.get('movement', 0):.3f}")
+                        print(f"\n📊 Engagement Score Breakdown (Frame {frame_counter}, Track {tid}):")
+                        print(f"  Gaze (40%):     {breakdown.get('gaze', 0):.3f}  ← Forward=1.0, Left/Right=0.2")
+                        print(f"  Eyes (25%):     {breakdown.get('eye', 0):.3f}  ← Open eyes indicate alertness")
+                        print(f"  Mouth (5%):     {breakdown.get('mouth', 0):.3f}  ← Closed=good, open=yawning")
+                        print(f"  Head (20%):     {breakdown.get('head', 0):.3f}  ← Upright=1.0, tilted=lower")
+                        print(f"  Movement (10%): {breakdown.get('movement', 0):.3f}  ← Low=engaged, high=restless")
                         print(f"  ──────────────")
                         print(f"  TOTAL:          {score:.3f}")
 
