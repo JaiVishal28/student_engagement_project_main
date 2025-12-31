@@ -161,11 +161,14 @@ class VADDetector:
         
         energy_variance = np.var(energies)
         mean_energy = np.mean(energies)
+        max_energy = np.max(energies)
         
-        # High variance suggests multiple speakers (more sensitive detection)
-        if energy_variance > 0.0001 and mean_energy > 0.02:  # Much more sensitive
+        # EXTREMELY SENSITIVE: Any variance or high energy suggests multiple speakers
+        if energy_variance > 0.00001 and mean_energy > 0.01:  # 10x more sensitive
             return 2  # Multiple speakers detected
-        elif mean_energy > 0.01:
-            return 1  # Single speaker (likely teacher)
+        elif max_energy > 0.05:  # High energy = likely multiple sources
+            return 2
+        elif mean_energy > 0.008:
+            return 1  # Single speaker
         else:
-            return 0  # Silence or very low audio
+            return 0  # Silence

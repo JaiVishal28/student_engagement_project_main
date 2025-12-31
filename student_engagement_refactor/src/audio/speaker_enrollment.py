@@ -266,10 +266,10 @@ class SpeakerEnrollment:
             expected_energy = self.teacher_profile['total_energy_mean']
             energy_ratio = current_energy / (expected_energy + 1e-10)
             
-            if energy_ratio > 1.5:  # 50% more energy than teacher alone
+            if energy_ratio > 1.3:  # Just 30% more energy = flag it
                 # Extra noise on top of teacher
-                noise_level = min(1.0, (energy_ratio - 1.0) / 2.0)  # Scale excess energy
-                student_noise_detected = noise_level > 0.25  # Lowered from 0.4
+                noise_level = min(1.0, (energy_ratio - 1.0) / 1.5)  # More sensitive scaling
+                student_noise_detected = noise_level > 0.15  # Very low threshold
             else:
                 noise_level = 0.0
                 student_noise_detected = False
@@ -277,11 +277,11 @@ class SpeakerEnrollment:
             # This does NOT sound like teacher - likely student voices
             # Map dissimilarity to noise level
             dissimilarity = 1.0 - teacher_similarity
-            noise_level = min(1.0, dissimilarity * 1.5)  # Amplify for sensitivity
-            student_noise_detected = noise_level > 0.35  # Lowered from 0.5
+            noise_level = min(1.0, dissimilarity * 1.8)  # Increased amplification
+            student_noise_detected = noise_level > 0.20  # Very sensitive
             
             if student_noise_detected:
-                logger.info(f"⚠️  Non-teacher voice detected (similarity={teacher_similarity:.3f} < 0.40) - STUDENT NOISE")
+                logger.info(f"⚠️  Non-teacher voice detected (similarity={teacher_similarity:.3f} < 0.25) - STUDENT NOISE")
         
         return {
             'student_noise_detected': student_noise_detected,
