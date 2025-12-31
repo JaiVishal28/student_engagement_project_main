@@ -199,13 +199,20 @@ def multimodal_engagement_score(visual_features: Dict[str, Any],
         print(f"    Audio Score:    {audio_score:.3f}  ← High = quiet environment")
         print(f"    Student Noise:  {audio_features.get('student_noise_detected', False)}  ← True = students talking")
         print(f"    Noise Level:    {audio_features.get('student_noise_level', 0):.3f}  ← 0=quiet, 1=loud")
-        print(f"    Is Teacher:     {audio_features.get('is_teacher_speaking', False)}  ← Voice matches teacher profile")
-        print(f"    Similarity:     {audio_features.get('teacher_similarity', 0):.3f}  ← How similar to enrolled voice")
+        print(f"    Is Teacher:     {audio_features.get('is_teacher_speaking', False)}  ← Similarity > 0.55")
+        print(f"    Similarity:     {audio_features.get('teacher_similarity', 0):.3f}  ← How similar to enrolled voice (threshold=0.55)")
         print(f"  ──────────────")
         print(f"  Base Score:     {(visual_weight * visual_score) + (audio_weight * audio_score):.3f}")
         if modulations:
             for mod in modulations:
                 print(f"  {mod}")
         print(f"  FINAL SCORE:    {combined_score:.3f}")
+        
+        # Add interpretation help
+        sim_score = audio_features.get('teacher_similarity', 0)
+        if sim_score > 0.55:
+            print(f"  ℹ️  Audio classified as TEACHER (similarity {sim_score:.2f} > 0.55)")
+        else:
+            print(f"  ⚠️  Audio classified as STUDENT/OTHER (similarity {sim_score:.2f} < 0.55)")
     
     return max(0.0, min(1.0, combined_score))
