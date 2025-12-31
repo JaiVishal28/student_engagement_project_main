@@ -1,3 +1,126 @@
+# Methodology & Runtime Flow
+
+This file summarizes what the current implementation in `student_engagement_refactor` does, the end‑to‑end runtime flow, the key files, how to run it, outputs produced, and current limitations — suitable to share with other LLMs or collaborators.
+
+## 1) High-level Purpose
+
+Automated, real-time student engagement detection for classroom video. The system detects people, tracks identities across frames, extracts visual features (gaze, eye openness, mouth, head pose, short-term movement), fuses them into a per-student engagement score, visualizes overlays, and logs structured CSV outputs for analysis.
+
+## 2) End-to-end Runtime Flow
+
+1. Capture
+   - Read frames from a video source: local webcam, phone/IP camera stream, or video file.
+   - Handled by the camera/capture component used by `src/main.py`.
+
+2. Person Detection
+   - Run YOLOv8 detector to obtain person bounding boxes and confidences.
+   - Implemented in `src/detection/yolov_wrapper.py`. Model weights in `models/weights/` (e.g., `yolov8s.pt`).
+
+3. Tracking
+   - Associate detections across frames using the SORT algorithm to maintain persistent student IDs.
+   - Implemented in `src/tracking/sort_tracker.py`.
+
+4. Feature Extraction (per tracked person)
+   - Crop the person/face region and extract facial landmarks and cues using MediaPipe Face Mesh.
+   - Extracted features: gaze direction, Eye Aspect Ratio (EAR), Mouth Aspect Ratio (MAR), head pose (pitch/yaw/roll), and short-term movement.
+   - Implemented in `src/features/visual_features.py`. OpenCV Haar Cascade is used as a fallback when MediaPipe is unavailable.
+
+5. Fusion & Scoring
+   - Normalize feature sub-scores and compute a weighted engagement score:
+     - Gaze: 40%
+     - Eye openness: 25%
+     - Head pose: 20%
+     - Movement: 10% (placeholder/temporal)
+     - Mouth openness: 5%
+   - Fusion logic lives in `src/fusion/fusion.py`.
+
+6. Visualization
+   - Overlay bounding boxes, student ID, engagement score, and FPS on frames.
+   - Provided by the display loop in `src/main.py` and helper visualization utilities.
+
+7. Logging & Output
+   - Persist per-frame, per-student CSV rows containing timestamp, student_id, raw feature values, normalized sub-scores, and final engagement_score.
+   - Implemented in `src/data_logger.py`. Default output directory configurable in `config.yaml` (e.g., `data/` or `logs/`).
+
+8. Evaluation (offline)
+   - Scripts under `evaluation/` or `scripts/` compute metrics and produce plots (accuracy, F1, temporal consistency, FPS, etc.).
+
+## 3) Key Files and Their Roles
+
+- `src/main.py` — Production entrypoint: CLI, main processing loop, visualization, logging, modes (`--source`, `--image`, `--no-display`, `--max-frames`).
+- `test_visual_features.py` — Single-image test harness for research figures (no tracking or logging). Useful for generating paper visuals.
+- `src/detection/yolov_wrapper.py` — YOLOv8 person detection wrapper.
+- `src/tracking/sort_tracker.py` — SORT multi-object tracker for persistent IDs.
+- `src/features/visual_features.py` — Landmark-based feature extraction (gaze, EAR, MAR, head pose, movement). Handles MediaPipe compatibility and OpenCV fallback.
+- `src/fusion/fusion.py` — Feature normalization and weighted engagement score computation.
+- `src/data_logger.py` — CSV logger for timestamped per-person outputs.
+- `config.yaml` — Central configuration (thresholds, weights, device, logging options).
+- `models/weights/` — Model weights (e.g., `yolov8s.pt`) and cascade XML files.
+- `find_cameras.py` — Utility to discover camera indices and troubleshoot camera detection.
+- `setup.bat`, `setup.sh`, `requirements.txt` — Environment setup and dependency lists.
+
+## 4) CLI / Run Commands (copyable)
+
+Run the production pipeline (default webcam):
+```powershell
+cd student_engagement_refactor
+python -m src.main
+```
+
+Use a specific webcam index (use `find_cameras.py` to discover indices):
+```powershell
+python -m src.main --source 1
+```
+
+Use an IP camera stream (example):
+```powershell
+python -m src.main --source "http://192.168.1.100:8080/video"
+```
+
+Process a saved video file:
+```powershell
+python -m src.main --source "videos/lecture.mp4"
+```
+
+Single image test for publication figures:
+```powershell
+python test_visual_features.py --image "images/students1.jpg" --output "output_features.jpg"
+```
+
+Headless (no display), logging only:
+```powershell
+python -m src.main --no-display --max-frames 10000
+```
+
+Use `--help` on `src.main` or `test_visual_features.py` for all CLI flags.
+
+## 5) Typical Outputs
+
+- Annotated images or video frames saved to a configured `results/` or project root (e.g., `output_features.jpg`).
+- CSV logs named like `engagement_YYYYMMDD_HHMMSS.csv` containing per-timestamp rows with columns: `timestamp, frame, student_id, gaze, eye_openness, mouth, head_pose, movement, engagement_score, bbox_x, bbox_y, bbox_w, bbox_h`.
+- Evaluation reports and plots produced by scripts in `evaluation/` or `scripts/`.
+
+## 6) Current Limitations and Notes
+
+- MediaPipe compatibility: `src/features/visual_features.py` includes handling for MediaPipe API changes and an OpenCV fallback; ensure `mediapipe` version in `requirements.txt` or use setup scripts.
+- Real-time performance varies by hardware. Use `config.yaml` to adjust resolution and `process_every_n_frames` to trade-off speed and accuracy.
+- Tracking uses SORT — fast but can drift under heavy occlusion. Consider DeepSORT/ByteTrack + ReID for future improvements.
+- Movement/temporal features are currently basic/placeholder; Phase 3 (LSTM/GRU + attention) will improve temporal consistency.
+
+## 7) Suggested Next Steps (for reproducible evaluation)
+
+1. Verify dependencies using `setup.bat`/`setup.sh` or `pip install -r requirements.txt`.
+2. Ensure `models/weights/yolov8s.pt` exists (or allow first-run to download).
+3. Run `python find_cameras.py` to identify camera indices before live testing.
+4. Run `python -m src.main --no-display --max-frames 300` to produce a short CSV and check logging format.
+5. Use `test_visual_features.py` to produce high-quality images for paper figures.
+
+---
+
+This `METHODOLOGY.md` is intentionally minimal and focused on reproducibility and sharing with other LLMs or collaborators. If you want the longer, full-context document with extra details, evaluation tables, and the roadmap, I can copy `PROJECT_CONTEXT.md` contents here or export both as a single JSON/YAML summary.
+
+---
+Last updated: December 31, 2025
 # Methodology: Student Engagement Detection System
 
 ## Abstract
