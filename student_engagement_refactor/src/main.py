@@ -3,6 +3,7 @@ import sys
 import time
 import yaml
 import cv2
+import numpy as np
 import argparse
 from pathlib import Path
 from src.logging_utils import get_logger
@@ -122,8 +123,42 @@ def run_video_mode(source=None, display=True, max_frames=None):
                 
             h, w = frame.shape[:2]
             display_frame = frame.copy() if display else None
+            frame_counter += 1
+            fps_counter += 1
             
-            # During enrollment, show info screen instead of processing video
+            # Process audio chunk FIRST (before enrollment screen check)
+            if use_audio and audio_capture and audio_capture.is_running():
+                audio_chunk_data = audio_capture.get_audio_chunk(timeout=0.01)
+                if audio_chunk_data:
+                    audio_data = audio_chunk_data['data']
+                    
+                    # Phase 1: Teacher enrollment (first 10 seconds)
+                    if not enrollment_complete:
+                        if speaker_enrollment.add_enrollment_sample(audio_data, sample_rate=16000):
+                            enrollment_complete = True
+                            logger.info("✅ Teacher enrollment complete! System now detecting student noise...")
+                        enrollment_counter += 1
+                    
+                    # Phase 2: Establish baseline (next 10 seconds)
+                    elif enrollment_complete and enrollment_counter < 40:
+                        audio_extractor.update_baseline(audio_data)
+                        enrollment_counter += 1
+                        if enrollment_counter == 40:
+                            logger.info("Audio baseline established - monitoring active")
+                    
+                    # Detect speech and estimate speakers
+                    speech_prob = vad_detector.detect_speech(audio_data, return_confidence=True)
+                    speaker_count = vad_detector.count_speakers_estimate(audio_data)
+                    
+                    # Extract audio features with teacher filtering
+                    current_audio_features = audio_extractor.extract_features(
+                        audio_data,
+                        vad_result=speech_prob,
+                        speaker_count=speaker_count,
+                        speaker_enrollment=speaker_enrollment if enrollment_complete else None
+                    )
+            
+            # During enrollment, show info screen and skip visual processing
             if use_audio and not enrollment_complete:
                 if display_frame is not None:
                     # Create enrollment info overlay
@@ -147,11 +182,7 @@ def run_video_mode(source=None, display=True, max_frames=None):
                         break
                 
                 # Continue to next frame (skip visual detection during enrollment)
-                frame_counter += 1
                 continue
-            
-            frame_counter += 1
-            fps_counter += 1
             
             # Check max frames limit
             if max_frames and frame_counter >= max_frames:
@@ -159,8 +190,6 @@ def run_video_mode(source=None, display=True, max_frames=None):
                 break
 
             # Run detection every N frames
-           # Always keep last detections
-# Run detection every N frames
             if frame_counter % process_every_n == 0:
                 last_detections = []
                 dets = detector.detect(frame)
@@ -169,38 +198,6 @@ def run_video_mode(source=None, display=True, max_frames=None):
                         last_detections.append([d['xmin'], d['ymin'], d['xmax'], d['ymax']])
 
             detections = last_detections
-
-            # Process audio chunk
-            if use_audio and audio_capture and audio_capture.is_running():
-                audio_chunk_data = audio_capture.get_audio_chunk(timeout=0.01)
-                if audio_chunk_data:
-                    audio_data = audio_chunk_data['data']
-                    
-                    # Phase 1: Teacher enrollment (first 10 seconds)
-                    if not enrollment_complete:
-                        if speaker_enrollment.add_enrollment_sample(audio_data, sample_rate=16000):
-                            enrollment_complete = True
-                            logger.info("✅ Teacher enrollment complete! System now detecting student noise...")
-                        enrollment_counter += 1
-                    
-                    # Phase 2: Establish baseline (next 10 seconds)
-                    if enrollment_complete and enrollment_counter < 40:
-                        audio_extractor.update_baseline(audio_data)
-                        enrollment_counter += 1
-                        if enrollment_counter == 40:
-                            logger.info("Audio baseline established - monitoring active")
-                    
-                    # Detect speech and estimate speakers
-                    speech_prob = vad_detector.detect_speech(audio_data, return_confidence=True)
-                    speaker_count = vad_detector.count_speakers_estimate(audio_data)
-                    
-                    # Extract audio features with teacher filtering
-                    current_audio_features = audio_extractor.extract_features(
-                        audio_data,
-                        vad_result=speech_prob,
-                        speaker_count=speaker_count,
-                        speaker_enrollment=speaker_enrollment if enrollment_complete else None
-                    )
 
             
             # Update tracker
