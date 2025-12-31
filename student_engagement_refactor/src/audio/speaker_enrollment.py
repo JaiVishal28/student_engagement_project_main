@@ -213,13 +213,14 @@ class SpeakerEnrollment:
         
         return total_similarity
     
-    def get_student_noise_level(self, audio_chunk, sample_rate=16000):
+    def get_student_noise_level(self, audio_chunk, sample_rate=16000, speaker_count=1):
         """
         Analyze audio to determine student noise level (excluding teacher).
         
         Args:
             audio_chunk: Audio data
             sample_rate: Sample rate
+            speaker_count: Number of speakers detected (from VAD)
             
         Returns:
             Dictionary with student noise analysis:
@@ -239,6 +240,19 @@ class SpeakerEnrollment:
         
         # Check if this is teacher speaking
         is_teacher, teacher_similarity = self.is_teacher_speaking(audio_chunk, sample_rate)
+        
+        # IMPORTANT: If multiple speakers detected, automatically flag as student noise
+        if speaker_count > 1:
+            # Multiple voices = students talking (even if one sounds like teacher)
+            return {
+                'student_noise_detected': True,
+                'noise_level': 0.8,  # High noise level
+                'is_teacher': False,  # Override - multiple speakers means students present
+                'teacher_similarity': float(teacher_similarity),
+                'confidence': 0.9,
+                'status': 'multiple_speakers',
+                'speaker_count': speaker_count
+            }
         
         # Extract features
         features = self._extract_spectral_features(audio_chunk, sample_rate)

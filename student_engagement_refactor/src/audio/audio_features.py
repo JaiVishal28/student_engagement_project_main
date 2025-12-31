@@ -79,7 +79,11 @@ class AudioFeatureExtractor:
         # Check for student noise using speaker enrollment
         student_noise_info = None
         if speaker_enrollment and speaker_enrollment.is_enrolled:
-            student_noise_info = speaker_enrollment.get_student_noise_level(audio_chunk)
+            student_noise_info = speaker_enrollment.get_student_noise_level(
+                audio_chunk, 
+                sample_rate=self.sample_rate,
+                speaker_count=speaker_count
+            )
         
         # Calculate features
         features = {
