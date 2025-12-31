@@ -244,6 +244,7 @@ class SpeakerEnrollment:
         # IMPORTANT: If multiple speakers detected, automatically flag as student noise
         if speaker_count > 1:
             # Multiple voices = students talking (even if one sounds like teacher)
+            logger.info(f"🔊 Multiple speakers detected (count={speaker_count}) - flagging as STUDENT NOISE")
             return {
                 'student_noise_detected': True,
                 'noise_level': 0.8,  # High noise level
@@ -278,6 +279,9 @@ class SpeakerEnrollment:
             dissimilarity = 1.0 - teacher_similarity
             noise_level = min(1.0, dissimilarity * 1.5)  # Amplify for sensitivity
             student_noise_detected = noise_level > 0.35  # Lowered from 0.5
+            
+            if student_noise_detected:
+                logger.info(f"⚠️  Non-teacher voice detected (similarity={teacher_similarity:.3f} < 0.40) - STUDENT NOISE")
         
         return {
             'student_noise_detected': student_noise_detected,
