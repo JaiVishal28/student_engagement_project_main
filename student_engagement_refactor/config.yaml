@@ -1,0 +1,24 @@
+capture:
+  source: 0         # 0 -> default webcam. Replace with file path for video.
+  width: 1280
+  height: 720
+  fps: 15
+
+detection:
+  weights: "models/weights/yolov8s.pt"
+  conf: 0.35
+  iou: 0.45
+  device: "cpu"
+
+tracking:
+  max_age: 30
+  min_hits: 3
+  iou_threshold: 0.3
+
+processing:
+  process_every_n_frames: 3
+  face_padding: 12
+  pose_padding: 12
+
+logging:
+  csv_path: "data/labels/engagement_data.csv"
