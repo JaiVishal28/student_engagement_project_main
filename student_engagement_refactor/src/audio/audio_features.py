@@ -53,7 +53,7 @@ class AudioFeatureExtractor:
             self.baseline_established = True
             logger.info(f"Baseline established: mean={self.baseline_mean:.4f}, std={self.baseline_std:.4f}")
     
-    def extract_features(self, audio_chunk, vad_result=None, speaker_count=1):
+    def extract_features(self, audio_chunk, vad_result=None, speaker_count=1, speaker_enrollment=None):
         """
         Extract engagement features from audio chunk.
         
@@ -61,6 +61,7 @@ class AudioFeatureExtractor:
             audio_chunk: Audio data (numpy array, float32)
             vad_result: Speech probability from VAD (0-1)
             speaker_count: Estimated number of speakers
+            speaker_enrollment: SpeakerEnrollment object for teacher filtering
             
         Returns:
             Dictionary of audio features
@@ -75,6 +76,11 @@ class AudioFeatureExtractor:
             self.speech_window.append(vad_result)
         self.speaker_count_window.append(speaker_count)
         
+        # Check for student noise using speaker enrollment
+        student_noise_info = None
+        if speaker_enrollment and speaker_enrollment.is_enrolled:
+            student_noise_info = speaker_enrollment.get_student_noise_level(audio_chunk)
+        
         # Calculate features
         features = {
             # Raw metrics
@@ -83,7 +89,13 @@ class AudioFeatureExtractor:
             'speech_probability': float(vad_result) if vad_result is not None else 0.0,
             'speaker_count': int(speaker_count),
             
-            # Engagement indicators
+            # Student noise detection (NEW - teacher-filtered)
+            'student_noise_detected': student_noise_info['student_noise_detected'] if student_noise_info else False,
+            'student_noise_level': student_noise_info['noise_level'] if student_noise_info else 0.0,
+            'is_teacher_speaking': student_noise_info['is_teacher'] if student_noise_info else True,
+            'teacher_similarity': student_noise_info.get('teacher_similarity', 1.0) if student_noise_info else 1.0,
+            
+            # Legacy engagement indicators (kept for compatibility)
             'background_noise_level': self._background_noise_level(energy),
             'multiple_speakers_detected': speaker_count > 1,
             'excessive_noise': energy > (self.baseline_mean + 2 * self.baseline_std) if self.baseline_established else False,
@@ -94,8 +106,8 @@ class AudioFeatureExtractor:
             'speech_activity_ratio': float(np.mean([s > 0.5 for s in self.speech_window])) if self.speech_window else 0.0,
         }
         
-        # Calculate engagement score from audio
-        features['audio_engagement_score'] = self._calculate_audio_engagement(features)
+        # Calculate engagement score from audio (using new method)
+        features['audio_engagement_score'] = self._calculate_audio_engagement_v2(features)
         
         return features
     
@@ -127,7 +139,8 @@ class AudioFeatureExtractor:
     
     def _calculate_audio_engagement(self, features):
         """
-        Calculate engagement score from audio features.
+        Calculate engagement score from audio features (LEGACY METHOD).
+        Kept for backward compatibility.
         
         Logic:
         - Low noise + single speaker = High engagement (listening)
@@ -164,6 +177,49 @@ class AudioFeatureExtractor:
         
         # Clamp to [0, 1]
         return max(0.0, min(1.0, score))
+    
+    def _calculate_audio_engagement_v2(self, features):
+        """
+        NEW: Calculate engagement using teacher-filtered audio analysis.
+        This method uses speaker enrollment to accurately detect student noise.
+        
+        Logic:
+        - Teacher speaking alone = HIGH engagement (students listening)
+        - Student noise detected = LOWER engagement (disruptions/side talk)
+        - Noise level scales the disengagement
+        
+        Returns:
+            Engagement score (0-1)
+        """
+        base_score = 0.85  # Start optimistic (engaged class)
+        
+        # If student noise is detected (teacher voice filtered out)
+        if features.get('student_noise_detected', False):
+            noise_level = features.get('student_noise_level', 0.0)
+            
+            # Heavy penalty for student noise
+            # noise_level: 0.0 = no noise, 1.0 = maximum disruption
+            noise_penalty = noise_level * 0.6  # Up to 60% reduction
+            base_score -= noise_penalty
+            
+            logger.debug(f"Student noise detected! Level: {noise_level:.2f}, Penalty: {noise_penalty:.2f}")
+        
+        # If it's clearly teacher speaking (high similarity)
+        elif features.get('is_teacher_speaking', False):
+            teacher_sim = features.get('teacher_similarity', 0.0)
+            
+            # High teacher similarity = likely paying attention
+            if teacher_sim > 0.8:
+                base_score = 0.90  # Very engaged (listening to teacher)
+            else:
+                base_score = 0.75  # Moderate engagement
+        
+        # Check for excessive general noise (backup check)
+        if features.get('excessive_noise', False):
+            base_score *= 0.85  # 15% reduction
+        
+        # Clamp to valid range
+        return max(0.0, min(1.0, base_score))
     
     def reset_baseline(self):
         """Reset baseline for new session."""
