@@ -78,12 +78,8 @@ class DataLogger:
                         r.get('bbox_xmin', 0),
                         r.get('bbox_ymin', 0),
                         r.get('bbox_xmax', 0),
-                        r.get('bbox_ymax', 0),                        # Audio features
-                        r.get('audio_energy', 0.0),
-                        r.get('speech_probability', 0.0),
-                        r.get('speaker_count', 0),
-                        r.get('background_noise_level', 'unknown'),
-                        r.get('audio_engagement_score', 0.0),                        # Audio features
+                        r.get('bbox_ymax', 0),
+                        # Audio features
                         r.get('audio_energy', 0.0),
                         r.get('speech_probability', 0.0),
                         r.get('speaker_count', 0),

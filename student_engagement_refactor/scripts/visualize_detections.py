@@ -28,7 +28,21 @@ def load_engagement_data(csv_path: str) -> pd.DataFrame:
         logger.error(f"CSV file not found: {csv_path}")
         return None
     
+    # Read CSV and check if it has a header
     df = pd.read_csv(csv_path)
+    
+    # Check if first row looks like data (not headers)
+    if 'student_id' not in df.columns:
+        # CSV has no header, need to add column names
+        logger.warning("CSV missing header row, adding column names")
+        df = pd.read_csv(csv_path, header=None, names=[
+            'timestamp', 'student_id', 'engagement_score',
+            'gaze', 'mouth_open', 'eye_openness', 'head_pitch', 'movement',
+            'bbox_xmin', 'bbox_ymin', 'bbox_xmax', 'bbox_ymax',
+            'audio_energy', 'speech_probability', 'speaker_count',
+            'background_noise_level', 'audio_engagement_score'
+        ])
+    
     logger.info(f"Loaded {len(df)} records from {csv_path}")
     logger.info(f"Unique students detected: {df['student_id'].nunique()}")
     return df
@@ -52,15 +66,20 @@ def find_best_frames_per_student(df: pd.DataFrame, min_engagement: float = 0.5):
         
         # Find frame with highest engagement score
         best_row = student_data.loc[student_data['engagement_score'].idxmax()]
+        
+        # Calculate bbox dimensions from xmin/ymin/xmax/ymax
+        xmin = int(best_row['bbox_xmin'])
+        ymin = int(best_row['bbox_ymin'])
+        xmax = int(best_row['bbox_xmax'])
+        ymax = int(best_row['bbox_ymax'])
+        
+        # Calculate frame number (use index as proxy if no frame column)
+        frame_num = int(best_row.name) if 'frame' not in best_row else int(best_row['frame'])
+        
         best_frames[student_id] = {
-            'frame': int(best_row['frame']),
+            'frame': frame_num,
             'engagement': float(best_row['engagement_score']),
-            'bbox': [
-                int(best_row['bbox_x']),
-                int(best_row['bbox_y']),
-                int(best_row['bbox_w']),
-                int(best_row['bbox_h'])
-            ]
+            'bbox': [xmin, ymin, xmax - xmin, ymax - ymin]  # Convert to x, y, w, h
         }
     
     return best_frames
@@ -242,8 +261,12 @@ def create_annotated_frame(video_path: str, csv_path: str, output_dir: str,
         frame_num = frame_counts.idxmax()
         logger.info(f"Auto-selected frame {frame_num} with {frame_counts.max()} students")
     
-    # Get all students in that frame
-    frame_data = df[df['frame'] == frame_num]
+    # Get all students in that frame (use index if no frame column)
+    if 'frame' in df.columns:
+        frame_data = df[df['frame'] == frame_num]
+    else:
+        # Use a range of indices around frame_num
+        frame_data = df.iloc[max(0, frame_num-5):min(len(df), frame_num+5)]
     
     # Open video and read frame
     cap = cv2.VideoCapture(video_path)
@@ -260,7 +283,10 @@ def create_annotated_frame(video_path: str, csv_path: str, output_dir: str,
     
     for _, row in frame_data.iterrows():
         student_id = int(row['student_id'])
-        x, y, w, h = int(row['bbox_x']), int(row['bbox_y']), int(row['bbox_w']), int(row['bbox_h'])
+        # Convert from xmin/ymin/xmax/ymax to x/y/w/h
+        xmin, ymin = int(row['bbox_xmin']), int(row['bbox_ymin'])
+        xmax, ymax = int(row['bbox_xmax']), int(row['bbox_ymax'])
+        x, y, w, h = xmin, ymin, xmax - xmin, ymax - ymin
         engagement = float(row['engagement_score'])
         
         # Color based on engagement
