@@ -23,28 +23,56 @@ logger = get_logger("VisualizeDetections")
 
 
 def load_engagement_data(csv_path: str) -> pd.DataFrame:
-    """Load engagement data CSV."""
     if not os.path.exists(csv_path):
         logger.error(f"CSV file not found: {csv_path}")
         return None
-    
-    # Read CSV and check if it has a header
-    df = pd.read_csv(csv_path)
-    
-    # Check if first row looks like data (not headers)
-    if 'student_id' not in df.columns:
-        # CSV has no header, need to add column names
-        logger.warning("CSV missing header row, adding column names")
-        df = pd.read_csv(csv_path, header=None, names=[
-            'timestamp', 'student_id', 'engagement_score',
-            'gaze', 'mouth_open', 'eye_openness', 'head_pitch', 'movement',
-            'bbox_xmin', 'bbox_ymin', 'bbox_xmax', 'bbox_ymax',
-            'audio_energy', 'speech_probability', 'speaker_count',
-            'background_noise_level', 'audio_engagement_score'
-        ])
-    
-    logger.info(f"Loaded {len(df)} records from {csv_path}")
+
+    df = pd.read_csv(
+        csv_path,
+        engine="python",
+        on_bad_lines="skip"
+    )
+
+    # ---- Normalize column names ----
+    COLUMN_MAP = {
+        "track_id": "student_id",
+        "engagement": "engagement_score",
+        "final_score": "engagement_score",
+
+        "x1": "bbox_xmin",
+        "y1": "bbox_ymin",
+        "x2": "bbox_xmax",
+        "y2": "bbox_ymax",
+    }
+
+    df = df.rename(columns={k: v for k, v in COLUMN_MAP.items() if k in df.columns})
+
+    REQUIRED = [
+        "student_id",
+        "engagement_score",
+        "bbox_xmin", "bbox_ymin", "bbox_xmax", "bbox_ymax"
+    ]
+
+    missing = [c for c in REQUIRED if c not in df.columns]
+    if missing:
+        raise ValueError(f"CSV missing required columns: {missing}")
+
+    # ---- Remove invalid bbox rows ----
+    def valid_bbox(row):
+        try:
+            int(row["bbox_xmin"])
+            int(row["bbox_ymin"])
+            int(row["bbox_xmax"])
+            int(row["bbox_ymax"])
+            return True
+        except:
+            return False
+
+    df = df[df.apply(valid_bbox, axis=1)]
+
+    logger.info(f"Loaded {len(df)} valid records from {csv_path}")
     logger.info(f"Unique students detected: {df['student_id'].nunique()}")
+
     return df
 
 
@@ -74,7 +102,7 @@ def find_best_frames_per_student(df: pd.DataFrame, min_engagement: float = 0.5):
         ymax = int(best_row['bbox_ymax'])
         
         # Calculate frame number (use index as proxy if no frame column)
-        frame_num = int(best_row.name) if 'frame' not in best_row else int(best_row['frame'])
+        frame_num = int(best_row["frame"]) if "frame" in df.columns else int(best_row.name)
         
         best_frames[student_id] = {
             'frame': frame_num,

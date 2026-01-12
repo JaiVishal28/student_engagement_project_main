@@ -6,17 +6,17 @@ capture:
 
 detection:
   weights: "models/weights/yolov8s.pt"
-  conf: 0.35
+  conf: 0.20          # Lowered from 0.35 - detects more students
   iou: 0.45
   device: "cpu"
 
 tracking:
-  max_age: 90        # Keep lost tracks for 90 frames (~6 seconds at 15fps)
-  min_hits: 5        # Require 5 consecutive detections to reduce false positives
-  iou_threshold: 0.25  # Lower threshold = more lenient matching (was 0.3)
+  max_age: 60         # Keep lost tracks for 60 frames (2 seconds at 30fps)
+  min_hits: 2         # Lowered from 5 - assign IDs faster, less false negatives
+  iou_threshold: 0.25 # Lower threshold = more lenient matching
 
 processing:
-  process_every_n_frames: 3
+  process_every_n_frames: 1  # Process EVERY frame (was 3) - no skipping!
   face_padding: 12
   pose_padding: 12
 

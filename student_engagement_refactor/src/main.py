@@ -114,6 +114,9 @@ def run_video_mode(source=None, display=True, max_frames=None):
         logger.info(f"Starting video mode from source: {cam_src}")
         if display:
             logger.info("Press 'q' to quit, 's' to save screenshot")
+            # Create resizable window that fits the screen
+            cv2.namedWindow("Student Engagement", cv2.WINDOW_NORMAL)
+        
         
         while True:
             frame = cam.read()

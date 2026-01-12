@@ -84,7 +84,7 @@ def test_detection(video_path: str, output_dir: str = "results/detection_test",
         # Draw detections
         annotated = frame.copy()
         for det in detections:
-            x1, y1, x2, y2 = map(int, det['bbox'])
+            x1, y1, x2, y2 = det['xmin'], det['ymin'], det['xmax'], det['ymax']
             conf = det['conf']
             
             # Color based on confidence
