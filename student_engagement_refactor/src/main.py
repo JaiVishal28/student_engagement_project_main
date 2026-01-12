@@ -3,6 +3,7 @@ import sys
 import time
 import yaml
 import cv2
+import numpy as np
 import argparse
 from pathlib import Path
 from src.logging_utils import get_logger
@@ -11,7 +12,8 @@ from src.capture import Camera
 from src.detection.yolov_wrapper import YoloDetector
 from src.tracking.sort_tracker import Sort
 from src.features.visual_features import extract_all
-from src.fusion.fusion import simple_engagement_score
+from src.fusion.fusion import simple_engagement_score, multimodal_engagement_score
+from src.audio import AudioCapture, VADDetector, AudioFeatureExtractor, SpeakerEnrollment
 
 logger = get_logger("Main")
 
@@ -72,6 +74,31 @@ def run_video_mode(source=None, display=True, max_frames=None):
         csv_path = BASE_DIR / "data" / "labels" / "engagement_data.csv"
         datalog = DataLogger(csv_path=str(csv_path))
 
+        # Initialize audio processing with teacher enrollment
+        use_audio = log_cfg.get("enable_audio", True)
+        audio_capture = None
+        vad_detector = None
+        audio_extractor = None
+        speaker_enrollment = None
+        current_audio_features = {}
+        enrollment_counter = 0
+        enrollment_complete = False
+        
+        if use_audio:
+            try:
+                audio_capture = AudioCapture(sample_rate=16000, chunk_duration=0.5)
+                vad_detector = VADDetector(threshold=0.5, sample_rate=16000)
+                audio_extractor = AudioFeatureExtractor(baseline_duration=5.0, sample_rate=16000)
+                speaker_enrollment = SpeakerEnrollment(enrollment_duration=10.0, similarity_threshold=0.25)
+                audio_capture.start()
+                logger.info("🎤 Audio processing enabled")
+                logger.info("📝 TEACHER ENROLLMENT: Please speak for 10 seconds to record your voice profile...")
+                logger.info("   (Stay quiet after 10 seconds to complete enrollment)")
+            except Exception as e:
+                logger.warning(f"Failed to initialize audio: {e}")
+                logger.info("Continuing with visual-only mode")
+                use_audio = False
+
 
         process_every_n = proc_cfg.get("process_every_n_frames", 3)
         frame_counter = 0
@@ -87,6 +114,9 @@ def run_video_mode(source=None, display=True, max_frames=None):
         logger.info(f"Starting video mode from source: {cam_src}")
         if display:
             logger.info("Press 'q' to quit, 's' to save screenshot")
+            # Create resizable window that fits the screen
+            cv2.namedWindow("Student Engagement", cv2.WINDOW_NORMAL)
+        
         
         while True:
             frame = cam.read()
@@ -99,14 +129,70 @@ def run_video_mode(source=None, display=True, max_frames=None):
             frame_counter += 1
             fps_counter += 1
             
+            # Process audio chunk FIRST (before enrollment screen check)
+            if use_audio and audio_capture and audio_capture.is_running():
+                audio_chunk_data = audio_capture.get_audio_chunk(timeout=0.01)
+                if audio_chunk_data:
+                    audio_data = audio_chunk_data['data']
+                    
+                    # Phase 1: Teacher enrollment (first 10 seconds)
+                    if not enrollment_complete:
+                        if speaker_enrollment.add_enrollment_sample(audio_data, sample_rate=16000):
+                            enrollment_complete = True
+                            logger.info("✅ Teacher enrollment complete! System now detecting student noise...")
+                        enrollment_counter += 1
+                    
+                    # Phase 2: Establish baseline (next 10 seconds)
+                    elif enrollment_complete and enrollment_counter < 40:
+                        audio_extractor.update_baseline(audio_data)
+                        enrollment_counter += 1
+                        if enrollment_counter == 40:
+                            logger.info("Audio baseline established - monitoring active")
+                    
+                    # Detect speech and estimate speakers
+                    speech_prob = vad_detector.detect_speech(audio_data, return_confidence=True)
+                    speaker_count = vad_detector.count_speakers_estimate(audio_data)
+                    
+                    # Extract audio features with teacher filtering
+                    current_audio_features = audio_extractor.extract_features(
+                        audio_data,
+                        vad_result=speech_prob,
+                        speaker_count=speaker_count,
+                        speaker_enrollment=speaker_enrollment if enrollment_complete else None
+                    )
+            
+            # During enrollment, show info screen and skip visual processing
+            if use_audio and not enrollment_complete:
+                if display_frame is not None:
+                    # Create enrollment info overlay
+                    overlay = np.zeros_like(display_frame)
+                    enrollment_pct = (enrollment_counter / 20) * 100
+                    cv2.putText(overlay, "TEACHER VOICE ENROLLMENT", 
+                               (w//2 - 250, h//2 - 80), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 165, 255), 3)
+                    cv2.putText(overlay, f"Progress: {enrollment_pct:.0f}%", 
+                               (w//2 - 150, h//2), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+                    cv2.putText(overlay, "Please speak clearly for 10 seconds", 
+                               (w//2 - 300, h//2 + 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                    cv2.putText(overlay, "(Stay alone, no background noise)", 
+                               (w//2 - 280, h//2 + 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 1)
+                    display_frame = cv2.addWeighted(display_frame, 0.3, overlay, 0.7, 0)
+                
+                # Show enrollment screen and skip visual processing
+                if display and display_frame is not None:
+                    cv2.imshow("Student Engagement", display_frame)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        logger.info("User requested quit during enrollment")
+                        break
+                
+                # Continue to next frame (skip visual detection during enrollment)
+                continue
+            
             # Check max frames limit
             if max_frames and frame_counter >= max_frames:
                 logger.info(f"Reached max frames limit: {max_frames}")
                 break
 
             # Run detection every N frames
-           # Always keep last detections
-# Run detection every N frames
             if frame_counter % process_every_n == 0:
                 last_detections = []
                 dets = detector.detect(frame)
@@ -115,7 +201,6 @@ def run_video_mode(source=None, display=True, max_frames=None):
                         last_detections.append([d['xmin'], d['ymin'], d['xmax'], d['ymax']])
 
             detections = last_detections
-
 
             
             # Update tracker
@@ -127,7 +212,7 @@ def run_video_mode(source=None, display=True, max_frames=None):
                 xmin, ymin, xmax, ymax, tid = t
                 xmin, ymin, xmax, ymax = int(xmin), int(ymin), int(xmax), int(ymax)
                 bbox = [xmin, ymin, xmax, ymax]
-                logger.info(f"LOGGING TRACK {tid} AT FRAME {frame_counter}")
+                logger.debug(f"Logging track {tid} at frame {frame_counter}")
 
                 # Compute visual features
                 try:
@@ -153,8 +238,24 @@ def run_video_mode(source=None, display=True, max_frames=None):
 
                 feats['movement'] = movement
 
-                # Compute engagement score
-                score = simple_engagement_score(feats)
+                # Compute engagement score (multimodal if audio available)
+                # Print detailed breakdown every 60 frames (~4 seconds)
+                show_breakdown = (frame_counter % 60 == 0)
+                
+                if use_audio and current_audio_features:
+                    score = multimodal_engagement_score(feats, current_audio_features, verbose=show_breakdown)
+                else:
+                    score = simple_engagement_score(feats)
+                    if show_breakdown:
+                        breakdown = feats.get('_score_breakdown', {})
+                        print(f"\n📊 Engagement Score Breakdown (Frame {frame_counter}, Track {tid}):")
+                        print(f"  Gaze (40%):     {breakdown.get('gaze', 0):.3f}  ← Forward=1.0, Left/Right=0.2")
+                        print(f"  Eyes (25%):     {breakdown.get('eye', 0):.3f}  ← Open eyes indicate alertness")
+                        print(f"  Mouth (5%):     {breakdown.get('mouth', 0):.3f}  ← Closed=good, open=yawning")
+                        print(f"  Head (20%):     {breakdown.get('head', 0):.3f}  ← Upright=1.0, tilted=lower")
+                        print(f"  Movement (10%): {breakdown.get('movement', 0):.3f}  ← Low=engaged, high=restless")
+                        print(f"  ──────────────")
+                        print(f"  TOTAL:          {score:.3f}")
 
                 # Visualization
                 if display and display_frame is not None:
@@ -174,7 +275,7 @@ def run_video_mode(source=None, display=True, max_frames=None):
                                0.4, (200, 200, 0), 1)
 
                 # Prepare log entry
-                rows_to_log.append({
+                log_entry = {
                     "student_id": int(tid),
                     "engagement_score": float(score),
                     "gaze": feats.get('gaze'),
@@ -185,9 +286,16 @@ def run_video_mode(source=None, display=True, max_frames=None):
                     "bbox_xmin": xmin,
                     "bbox_ymin": ymin,
                     "bbox_xmax": xmax,
-                    "bbox_ymax": ymax
-                })
-                logger.info(f"ROW CREATED FOR TRACK {tid}")
+                    "bbox_ymax": ymax,
+                    # Audio features
+                    "audio_energy": current_audio_features.get('audio_energy', 0.0),
+                    "speech_probability": current_audio_features.get('speech_probability', 0.0),
+                    "speaker_count": current_audio_features.get('speaker_count', 0),
+                    "background_noise_level": current_audio_features.get('background_noise_level', 'unknown'),
+                    "audio_engagement_score": current_audio_features.get('audio_engagement_score', 0.0),
+                }
+                rows_to_log.append(log_entry)
+                logger.debug(f"Row created for track {tid}")
 
             
             # Log data
@@ -211,6 +319,38 @@ def run_video_mode(source=None, display=True, max_frames=None):
                 cv2.putText(display_frame, f"Tracks: {len(tracks)}", 
                            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 
+                # Audio status overlay (only show if enrollment complete)
+                if use_audio and current_audio_features and enrollment_complete:
+                    # Standard audio metrics - handle 'unknown' strings
+                    try:
+                        noise_level = float(current_audio_features.get('background_noise_level', 0.0))
+                    except (ValueError, TypeError):
+                        noise_level = 0.0
+                    
+                    audio_status = f"Audio Noise: {noise_level:.2f}"
+                    cv2.putText(display_frame, audio_status, 
+                               (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 200), 1)
+                    
+                    # Student noise detection
+                    student_noise = current_audio_features.get('student_noise_detected', False)
+                    
+                    try:
+                        student_level = float(current_audio_features.get('student_noise_level', 0.0))
+                    except (ValueError, TypeError):
+                        student_level = 0.0
+                    
+                    is_teacher = current_audio_features.get('is_teacher_speaking', False)
+                    
+                    if student_noise:
+                        student_text = f"STUDENT NOISE: {student_level:.2f}"
+                        cv2.putText(display_frame, student_text, 
+                                   (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                    else:
+                        teacher_text = "Teacher Only" if is_teacher else "Quiet"
+                        cv2.putText(display_frame, teacher_text, 
+                                   (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+
+                
                 cv2.imshow("Student Engagement", display_frame)
                 key = cv2.waitKey(1) & 0xFF
                 
@@ -227,6 +367,11 @@ def run_video_mode(source=None, display=True, max_frames=None):
     except Exception as e:
         logger.error(f"Error in video mode: {e}", exc_info=True)
     finally:
+        # Cleanup resources
+        if 'audio_capture' in locals() and audio_capture:
+            audio_capture.cleanup()
+            logger.info("Audio capture cleaned up")
+        
         if 'cam' in locals():
             cam.release()
         if display:
