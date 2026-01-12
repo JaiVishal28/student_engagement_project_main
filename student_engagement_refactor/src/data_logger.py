@@ -33,19 +33,20 @@ class DataLogger:
 
     def _ensure_header(self):
         """Create CSV file with header if it doesn't exist."""
+        # Define exact columns (store as class variable)
+        self.csv_columns = [
+            'timestamp', 'student_id', 'engagement_score',
+            'gaze', 'mouth_open', 'eye_openness', 'head_pitch', 'movement',
+            'bbox_xmin', 'bbox_ymin', 'bbox_xmax', 'bbox_ymax',
+            'audio_energy', 'speech_probability', 'speaker_count',
+            'background_noise_level', 'audio_engagement_score'
+        ]
+        
         if not os.path.exists(self.csv_path):
-            header = [
-                'timestamp', 'student_id', 'engagement_score',
-                'gaze', 'mouth_open', 'eye_openness', 'head_pitch', 'movement',
-                'bbox_xmin', 'bbox_ymin', 'bbox_xmax', 'bbox_ymax',
-                # Audio features
-                'audio_energy', 'speech_probability', 'speaker_count',
-                'background_noise_level', 'audio_engagement_score'
-            ]
             with open(self.csv_path, 'w', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow(header)
-            logger.info(f"Created CSV header at {self.csv_path}")
+                writer.writerow(self.csv_columns)
+            logger.info(f"Created CSV header at {self.csv_path} with {len(self.csv_columns)} columns")
 
     def log(self, rows: List[Dict[str, Any]]):
         """
@@ -66,7 +67,8 @@ class DataLogger:
                     self.student_ids.add(r.get('student_id'))
                     self.engagement_sum += float(r.get('engagement_score', 0.0))
 
-                    writer.writerow([
+                    # Build row matching EXACTLY the header columns
+                    row = [
                         timestamp,
                         r.get('student_id', 'unknown'),
                         r.get('engagement_score', 0.0),
@@ -79,13 +81,19 @@ class DataLogger:
                         r.get('bbox_ymin', 0),
                         r.get('bbox_xmax', 0),
                         r.get('bbox_ymax', 0),
-                        # Audio features
                         r.get('audio_energy', 0.0),
                         r.get('speech_probability', 0.0),
                         r.get('speaker_count', 0),
-                        r.get('background_noise_level', 'unknown'),
+                        r.get('background_noise_level', 0.0),  # Changed to numeric to avoid string alignment issues
                         r.get('audio_engagement_score', 0.0),
-                    ])
+                    ]
+                    
+                    # Verify row length matches header
+                    if len(row) != len(self.csv_columns):
+                        logger.error(f"Row length mismatch: {len(row)} != {len(self.csv_columns)}")
+                        continue
+                    
+                    writer.writerow(row)
 
                 # 🔥 CRITICAL FOR WINDOWS: force write to disk
                 f.flush()
