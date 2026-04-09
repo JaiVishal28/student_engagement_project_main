@@ -3,6 +3,12 @@ import torch
 from collections import deque
 from src.logging_utils import get_logger
 
+try:
+    import librosa
+    HAS_LIBROSA = True
+except ImportError:
+    HAS_LIBROSA = False
+
 logger = get_logger("SpeakerEnrollment")
 
 
@@ -30,11 +36,18 @@ class SpeakerEnrollment:
         self.teacher_mfcc_profile = None
         self.is_enrolled = False
         
+        # Teacher MFCC profile (primary identity feature, requires librosa)
+        self.teacher_mfcc_profile = None
+
         # Rolling statistics
         self.enrollment_samples = []
         self.max_enrollment_samples = 20  # ~10 seconds at 0.5s chunks
-        
+
         logger.info(f"Speaker enrollment initialized: {enrollment_duration}s enrollment period")
+        if HAS_LIBROSA:
+            logger.info("  Using MFCC cosine similarity for speaker identification")
+        else:
+            logger.warning("  librosa not found — falling back to spectral similarity (less accurate)")
     
     def add_enrollment_sample(self, audio_chunk, sample_rate=16000):
         """
@@ -51,7 +64,13 @@ class SpeakerEnrollment:
         if self.is_enrolled:
             logger.warning("Already enrolled, ignoring new sample")
             return True
-        
+
+        # --- Energy gate: only enroll chunks where teacher is actually speaking ---
+        rms = float(np.sqrt(np.mean(audio_chunk ** 2)))
+        if rms < 0.006:
+            logger.debug(f"Skipping silent enrollment chunk (rms={rms:.4f})")
+            return False
+
         # Extract spectral features
         features = self._extract_spectral_features(audio_chunk, sample_rate)
         self.enrollment_samples.append(features)
@@ -103,7 +122,7 @@ class SpeakerEnrollment:
         high_energy = np.sum(high_band**2)
         total_energy = low_energy + mid_energy + high_energy + 1e-10
         
-        return {
+        result = {
             'spectral_centroid': spectral_centroid,
             'spectral_rolloff': spectral_rolloff,
             'spectral_flux': spectral_flux,
@@ -112,8 +131,20 @@ class SpeakerEnrollment:
             'mid_energy_ratio': mid_energy / total_energy,
             'high_energy_ratio': high_energy / total_energy,
             'total_energy': total_energy,
-            'magnitude_spectrum': magnitude
+            'mfcc_mean': None,
         }
+
+        # MFCC — primary speaker identity feature (requires librosa)
+        if HAS_LIBROSA:
+            try:
+                mfcc = librosa.feature.mfcc(
+                    y=audio_chunk.astype(np.float32), sr=sample_rate, n_mfcc=13
+                )
+                result['mfcc_mean'] = np.mean(mfcc, axis=1)  # shape (13,)
+            except Exception as e:
+                logger.debug(f"MFCC extraction failed: {e}")
+
+        return result
     
     def _finalize_enrollment(self):
         """Finalize teacher voice profile from collected samples."""
@@ -138,6 +169,16 @@ class SpeakerEnrollment:
         self.teacher_profile['spectral_centroid_std'] = np.std([s['spectral_centroid'] for s in self.enrollment_samples])
         self.teacher_profile['spectral_rolloff_std'] = np.std([s['spectral_rolloff'] for s in self.enrollment_samples])
         
+        # Build MFCC profile (primary identity vector)
+        if HAS_LIBROSA:
+            mfcc_vectors = [
+                s['mfcc_mean'] for s in self.enrollment_samples
+                if s.get('mfcc_mean') is not None
+            ]
+            if mfcc_vectors:
+                self.teacher_mfcc_profile = np.mean(mfcc_vectors, axis=0)
+                logger.info(f"  MFCC profile built from {len(mfcc_vectors)} speech chunks")
+
         self.is_enrolled = True
         logger.info(f"Teacher enrollment complete! Profile created from {len(self.enrollment_samples)} samples")
         logger.info(f"  Spectral Centroid: {self.teacher_profile['spectral_centroid']:.1f} Hz")
@@ -174,44 +215,57 @@ class SpeakerEnrollment:
     def _calculate_similarity(self, current_features):
         """
         Calculate similarity between current audio and teacher profile.
-        
+
+        Primary method: MFCC cosine similarity (requires librosa).
+        Fallback: improved spectral feature comparison with wider tolerances.
+
         Returns:
-            Similarity score (0-1), 1 = identical to teacher
+            Similarity score [0, 1], where 1 = identical to teacher
         """
         if not self.is_enrolled or not self.teacher_profile:
             return 0.0
-        
-        # Compare spectral centroid (weighted 30%)
+
+        # ── Primary: MFCC cosine similarity ─────────────────────────────────
+        if (
+            HAS_LIBROSA
+            and self.teacher_mfcc_profile is not None
+            and current_features.get('mfcc_mean') is not None
+        ):
+            dot = float(np.dot(current_features['mfcc_mean'], self.teacher_mfcc_profile))
+            norm = (
+                np.linalg.norm(current_features['mfcc_mean'])
+                * np.linalg.norm(self.teacher_mfcc_profile)
+                + 1e-10
+            )
+            # Raw cosine is in [-1, 1]; clip to [0, 1] — voice comparisons are always ≥ 0
+            return float(max(0.0, dot / norm))
+
+        # ── Fallback: spectral comparison with realistic tolerances ──────────
+        # Natural speech for 1 speaker varies ±1000Hz in centroid → use 1500Hz tolerance
         centroid_diff = abs(current_features['spectral_centroid'] - self.teacher_profile['spectral_centroid'])
-        centroid_tolerance = max(self.teacher_profile['spectral_centroid_std'], 100)  # At least 100Hz tolerance
-        centroid_similarity = max(0, 1 - (centroid_diff / centroid_tolerance))
-        
-        # Compare spectral rolloff (weighted 25%)
+        centroid_tolerance = max(self.teacher_profile['spectral_centroid_std'] * 3.0, 1500.0)
+        centroid_similarity = max(0.0, 1.0 - centroid_diff / centroid_tolerance)
+
         rolloff_diff = abs(current_features['spectral_rolloff'] - self.teacher_profile['spectral_rolloff'])
-        rolloff_tolerance = max(self.teacher_profile['spectral_rolloff_std'], 200)
-        rolloff_similarity = max(0, 1 - (rolloff_diff / rolloff_tolerance))
-        
-        # Compare ZCR (weighted 15%)
+        rolloff_tolerance = max(self.teacher_profile['spectral_rolloff_std'] * 3.0, 2000.0)
+        rolloff_similarity = max(0.0, 1.0 - rolloff_diff / rolloff_tolerance)
+
         zcr_diff = abs(current_features['zcr'] - self.teacher_profile['zcr'])
-        zcr_similarity = max(0, 1 - (zcr_diff / 0.1))  # 0.1 is typical ZCR range
-        
-        # Compare frequency band ratios (weighted 30%)
+        zcr_similarity = max(0.0, 1.0 - zcr_diff / 0.20)  # 0.20 tolerance
+
         band_diff = (
             abs(current_features['low_energy_ratio'] - self.teacher_profile['low_energy_ratio']) +
             abs(current_features['mid_energy_ratio'] - self.teacher_profile['mid_energy_ratio']) +
             abs(current_features['high_energy_ratio'] - self.teacher_profile['high_energy_ratio'])
-        ) / 3
-        band_similarity = max(0, 1 - band_diff * 2)  # Scale to 0-1
-        
-        # Weighted average
-        total_similarity = (
+        ) / 3.0
+        band_similarity = max(0.0, 1.0 - band_diff * 1.5)
+
+        return (
             0.30 * centroid_similarity +
             0.25 * rolloff_similarity +
             0.15 * zcr_similarity +
             0.30 * band_similarity
         )
-        
-        return total_similarity
     
     def get_student_noise_level(self, audio_chunk, sample_rate=16000, speaker_count=1):
         """
@@ -238,58 +292,57 @@ class SpeakerEnrollment:
                 'status': 'enrolling'
             }
         
-        # Check if this is teacher speaking
-        is_teacher, teacher_similarity = self.is_teacher_speaking(audio_chunk, sample_rate)
-        
-        # IMPORTANT: If multiple speakers detected, automatically flag as student noise
-        if speaker_count > 1:
-            # Multiple voices = students talking (even if one sounds like teacher)
-            logger.info(f"🔊 Multiple speakers detected (count={speaker_count}) - flagging as STUDENT NOISE")
+        # ── Silence gate — no speech means no noise ────────────────────────
+        rms = float(np.sqrt(np.mean(audio_chunk ** 2)))
+        if rms < 0.006:
             return {
-                'student_noise_detected': True,
-                'noise_level': 0.8,  # High noise level
-                'is_teacher': False,  # Override - multiple speakers means students present
-                'teacher_similarity': float(teacher_similarity),
-                'confidence': 0.9,
-                'status': 'multiple_speakers',
-                'speaker_count': speaker_count
+                'student_noise_detected': False,
+                'noise_level': 0.0,
+                'is_teacher': False,
+                'teacher_similarity': 0.0,
+                'confidence': 1.0,
+                'status': 'silence',
+                'speaker_count': speaker_count,
             }
-        
-        # Extract features
-        features = self._extract_spectral_features(audio_chunk, sample_rate)
-        current_energy = features['total_energy']
-        
-        # Calculate student noise level
+
+        # ── Primary check: does this audio match the teacher's voice? ─────────
+        # speaker_count from the VAD fallback is unreliable (not Silero) so we
+        # treat it only as soft evidence, not a hard override.
+        is_teacher, teacher_similarity = self.is_teacher_speaking(audio_chunk, sample_rate)
+
         if is_teacher:
-            # This sounds like teacher - minimal student noise
-            # But check if energy is HIGHER than expected (students talking over teacher)
-            expected_energy = self.teacher_profile['total_energy_mean']
-            energy_ratio = current_energy / (expected_energy + 1e-10)
-            
-            if energy_ratio > 1.3:  # Just 30% more energy = flag it
-                # Extra noise on top of teacher
-                noise_level = min(1.0, (energy_ratio - 1.0) / 1.5)  # More sensitive scaling
-                student_noise_detected = noise_level > 0.15  # Very low threshold
+            # Teacher's voice — check if energy is unusually high
+            # (would indicate students talking loudly over the teacher)
+            features = self._extract_spectral_features(audio_chunk, sample_rate)
+            expected_energy = self.teacher_profile.get('total_energy_mean', 1.0)
+            energy_ratio = features['total_energy'] / (expected_energy + 1e-10)
+
+            if energy_ratio > 2.5:  # >2.5× louder than teacher baseline = extra voices
+                noise_level = min(1.0, (energy_ratio - 1.0) / 4.0)
+                student_noise_detected = noise_level > 0.35
             else:
                 noise_level = 0.0
                 student_noise_detected = False
         else:
-            # This does NOT sound like teacher - likely student voices
-            # Map dissimilarity to noise level
+            # Not teacher's voice — likely a student speaking
             dissimilarity = 1.0 - teacher_similarity
-            noise_level = min(1.0, dissimilarity * 1.8)  # Increased amplification
-            student_noise_detected = noise_level > 0.20  # Very sensitive
-            
+            noise_level = min(1.0, dissimilarity)
+            student_noise_detected = noise_level > 0.40
+
             if student_noise_detected:
-                logger.info(f"⚠️  Non-teacher voice detected (similarity={teacher_similarity:.3f} < 0.25) - STUDENT NOISE")
-        
+                logger.info(
+                    f"⚠️  Student noise detected "
+                    f"(teacher_similarity={teacher_similarity:.3f} < {self.similarity_threshold})"
+                )
+
         return {
             'student_noise_detected': student_noise_detected,
             'noise_level': float(noise_level),
             'is_teacher': is_teacher,
             'teacher_similarity': float(teacher_similarity),
-            'confidence': float(teacher_similarity),
-            'status': 'active'
+            'confidence': float(teacher_similarity if is_teacher else 1.0 - teacher_similarity),
+            'status': 'active',
+            'speaker_count': speaker_count,
         }
     
     def reset(self):

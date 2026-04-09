@@ -163,12 +163,15 @@ class VADDetector:
         mean_energy = np.mean(energies)
         max_energy = np.max(energies)
         
-        # EXTREMELY SENSITIVE: Any variance or high energy suggests multiple speakers
-        if energy_variance > 0.00001 and mean_energy > 0.01:  # 10x more sensitive
-            return 2  # Multiple speakers detected
-        elif max_energy > 0.05:  # High energy = likely multiple sources
-            return 2
-        elif mean_energy > 0.008:
-            return 1  # Single speaker
-        else:
-            return 0  # Silence
+        # Silence gate
+        if mean_energy < 0.005:
+            return 0
+
+        # Use coefficient of variation (CV) as the multi-speaker signal.
+        # A single natural speaker in a 500ms window has CV ~0.2–0.7.
+        # Simultaneous overlapping voices create much higher chaotic variance.
+        # CV > 1.2 at high loudness is strong evidence of multiple voices.
+        cv = np.std(energies) / (mean_energy + 1e-10)
+        if cv > 1.2 and mean_energy > 0.10:
+            return 2   # Strong evidence of overlapping voices
+        return 1       # Default: single active speaker
