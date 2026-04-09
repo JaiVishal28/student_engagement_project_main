@@ -5,7 +5,9 @@ capture:
   fps: 15
 
 detection:
-  weights: "models/weights/yolov8s.pt"
+  # Supported variants: yolov8s.pt | yolov9s.pt | yolo11s.pt
+  # Ultralytics auto-downloads the file if not present locally.
+  weights: "yolov8s.pt"
   conf: 0.20          # Lowered from 0.35 - detects more students
   iou: 0.45
   device: "cpu"
