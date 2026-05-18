@@ -43,6 +43,10 @@ class SpeakerEnrollment:
         self.enrollment_samples = []
         self.max_enrollment_samples = 20  # ~10 seconds at 0.5s chunks
 
+        # Rolling window for smoothed classification (last 5 chunks = ~2.5 sec).
+        # Median is used so one outlier chunk never flips the label.
+        self.similarity_window = deque(maxlen=5)
+
         logger.info(f"Speaker enrollment initialized: {enrollment_duration}s enrollment period")
         if HAS_LIBROSA:
             logger.info("  Using MFCC cosine similarity for speaker identification")
@@ -178,9 +182,11 @@ class SpeakerEnrollment:
             if mfcc_vectors:
                 mfcc_array = np.array(mfcc_vectors)  # shape (N, 13)
                 self.teacher_mfcc_profile = np.mean(mfcc_array, axis=0)
-                # Per-coefficient std dev — used for z-score similarity
-                # Add a floor of 1.0 to avoid near-zero std (which inflates z-scores)
-                self.teacher_mfcc_std = np.std(mfcc_array, axis=0) + 1.0
+                # Per-coefficient std dev — used for z-score similarity.
+                # Floor raised to 3.0 (was 1.0) so natural phoneme-to-phoneme
+                # variation in MFCC_0 (energy) and formant coefficients doesn't
+                # push the teacher's own chunks into high z-score territory.
+                self.teacher_mfcc_std = np.std(mfcc_array, axis=0) + 3.0
                 logger.info(f"  MFCC profile built from {len(mfcc_vectors)} speech chunks")
 
         self.is_enrolled = True
@@ -205,16 +211,22 @@ class SpeakerEnrollment:
         if not self.is_enrolled:
             # During enrollment, assume it's teacher
             return True, 1.0
-        
+
         # Extract features from current audio
         current_features = self._extract_spectral_features(audio_chunk, sample_rate)
-        
-        # Calculate similarity score
-        similarity = self._calculate_similarity(current_features)
-        
-        is_teacher = similarity > self.similarity_threshold
-        
-        return is_teacher, similarity
+
+        # Raw per-chunk similarity
+        raw_similarity = self._calculate_similarity(current_features)
+
+        # Smooth over last 5 chunks (~2.5 sec) using median.
+        # One high-scoring YouTube chunk won't flip to "teacher";
+        # one low-scoring teacher chunk won't flip to "student".
+        self.similarity_window.append(raw_similarity)
+        smoothed_similarity = float(np.median(self.similarity_window))
+
+        is_teacher = smoothed_similarity > self.similarity_threshold
+
+        return is_teacher, smoothed_similarity
     
     def _calculate_similarity(self, current_features):
         """
@@ -362,5 +374,6 @@ class SpeakerEnrollment:
         """Reset enrollment to start fresh."""
         self.teacher_profile = None
         self.enrollment_samples = []
+        self.similarity_window.clear()
         self.is_enrolled = False
         logger.info("Speaker enrollment reset")
