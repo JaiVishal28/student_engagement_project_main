@@ -1,0 +1,28 @@
+capture:
+  source: 0
+  width: 1280
+  height: 720
+
+detection:
+  weights: "yolov8s.pt"
+  conf: 0.45
+  iou: 0.50
+  imgsz: 640
+  device: "cpu"
+
+tracking:
+  max_age: 30
+  min_hits: 3
+  iou_threshold: 0.30
+
+processing:
+  process_every_n_frames: 3
+
+audio:
+  sample_rate: 16000
+  chunk_duration: 0.5
+  vad_threshold: 0.5
+  baseline_duration: 5.0
+  noise_threshold: 0.03
+  enrollment_duration: 10.0
+  similarity_threshold: 0.72

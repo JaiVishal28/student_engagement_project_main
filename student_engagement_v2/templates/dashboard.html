@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Student Engagement Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- ═══ START SCREEN ═══ -->
+    <div class="start-screen" id="start-screen">
+        <div class="start-content">
+            <div class="start-logo">📊</div>
+            <h1 class="start-title">Student Engagement System</h1>
+            <p class="start-subtitle">Real-time Multimodal Analysis with AI</p>
+            <div class="start-features">
+                <div class="feature-item">👁️ Visual Detection</div>
+                <div class="feature-item">🎤 Audio Analysis</div>
+                <div class="feature-item">📈 Live Dashboard</div>
+            </div>
+            <button class="start-btn" id="start-btn">
+                <span class="btn-icon">▶</span> Start System
+            </button>
+            <p class="start-hint">Speak for 10 seconds during enrollment to register your voice</p>
+        </div>
+    </div>
+
+    <!-- ═══ MAIN DASHBOARD (hidden until started) ═══ -->
+    <div class="dashboard-wrapper" id="dashboard-wrapper" style="display:none;">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <div class="logo-icon">📊</div>
+                <div>
+                    <h1>Student Engagement</h1>
+                    <p class="subtitle">Real-time Multimodal Analysis</p>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="status-pill" id="connection-status">
+                    <span class="dot"></span> Connecting...
+                </div>
+                <div class="fps-badge" id="fps-badge">0 FPS</div>
+                <button class="stop-btn" id="stop-btn">⏹ Stop</button>
+            </div>
+        </header>
+
+        <main class="main-grid">
+            <!-- Video Feed -->
+            <section class="card video-card">
+                <div class="card-header">
+                    <h2>📹 Live Feed</h2>
+                    <span class="badge" id="student-count-badge">0 students</span>
+                </div>
+                <div class="video-container">
+                    <img id="video-feed" alt="Live video feed">
+                    <div class="enrollment-overlay" id="enrollment-overlay">
+                        <div class="enrollment-content">
+                            <div class="enrollment-icon">🎤</div>
+                            <h3>Teacher Voice Enrollment</h3>
+                            <p>Please speak clearly for 10 seconds</p>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar" id="enrollment-bar" style="width: 0%"></div>
+                            </div>
+                            <span class="progress-text" id="enrollment-text">0%</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Panel -->
+            <aside class="right-panel">
+                <section class="card metric-card">
+                    <h2>🎯 Class Engagement</h2>
+                    <div class="engagement-ring-container">
+                        <svg class="engagement-ring" viewBox="0 0 120 120">
+                            <circle class="ring-bg" cx="60" cy="60" r="52" />
+                            <circle class="ring-fg" id="eng-ring" cx="60" cy="60" r="52"
+                                    stroke-dasharray="326.7" stroke-dashoffset="326.7" />
+                        </svg>
+                        <div class="ring-value" id="eng-value">0%</div>
+                    </div>
+                    <div class="engagement-label" id="eng-label">Waiting...</div>
+                </section>
+
+                <section class="card metric-card audio-card">
+                    <h2>🎤 Audio Analysis</h2>
+                    <div class="audio-status-box" id="audio-status-box">
+                        <span class="audio-icon" id="audio-icon">🔇</span>
+                        <span class="audio-text" id="audio-text">Initializing...</span>
+                    </div>
+                    <div class="audio-details">
+                        <div class="detail-row"><span>Similarity</span><span id="similarity-val">—</span></div>
+                        <div class="detail-row"><span>Noise Level</span><span id="noise-val">—</span></div>
+                        <div class="detail-row"><span>Energy</span><span id="energy-val">—</span></div>
+                    </div>
+                </section>
+
+                <section class="card chart-card">
+                    <h2>📈 Engagement History</h2>
+                    <canvas id="history-chart"></canvas>
+                </section>
+            </aside>
+
+            <!-- Student Cards -->
+            <section class="card students-card">
+                <div class="card-header"><h2>👥 Individual Students</h2></div>
+                <div class="students-grid" id="students-grid">
+                    <div class="empty-state">No students detected yet</div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        const socket = io();
+        let systemStarted = false;
+
+        // ── Elements ──
+        const startScreen = document.getElementById('start-screen');
+        const dashWrapper = document.getElementById('dashboard-wrapper');
+        const startBtn = document.getElementById('start-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const statusEl = document.getElementById('connection-status');
+        const fpsEl = document.getElementById('fps-badge');
+        const engRing = document.getElementById('eng-ring');
+        const engValue = document.getElementById('eng-value');
+        const engLabel = document.getElementById('eng-label');
+        const audioBox = document.getElementById('audio-status-box');
+        const audioIcon = document.getElementById('audio-icon');
+        const audioText = document.getElementById('audio-text');
+        const studentsGrid = document.getElementById('students-grid');
+        const enrollOverlay = document.getElementById('enrollment-overlay');
+        const enrollBar = document.getElementById('enrollment-bar');
+        const enrollText = document.getElementById('enrollment-text');
+        const studentBadge = document.getElementById('student-count-badge');
+        const videoFeed = document.getElementById('video-feed');
+
+        // ── Chart ──
+        const ctx = document.getElementById('history-chart').getContext('2d');
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: { labels: [], datasets: [{
+                label: 'Engagement', data: [],
+                borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.1)',
+                fill: true, tension: 0.4, pointRadius: 0, borderWidth: 2
+            }]},
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                scales: {
+                    y: { min: 0, max: 1, ticks: { color: '#94a3b8', callback: v => (v*100)+'%' },
+                         grid: { color: 'rgba(148,163,184,0.1)' }},
+                    x: { display: false }
+                },
+                plugins: { legend: { display: false } },
+                animation: { duration: 300 }
+            }
+        });
+
+        // ── START BUTTON ──
+        startBtn.addEventListener('click', () => {
+            systemStarted = true;
+            startScreen.style.display = 'none';
+            dashWrapper.style.display = 'block';
+            // Start video feed
+            videoFeed.src = '/video_feed';
+            // Tell server to start the pipeline
+            socket.emit('start');
+        });
+
+        // ── STOP BUTTON ──
+        stopBtn.addEventListener('click', () => {
+            socket.emit('stop');
+            dashWrapper.style.display = 'none';
+            startScreen.style.display = 'flex';
+            systemStarted = false;
+            videoFeed.src = '';
+        });
+
+        // ── WebSocket ──
+        socket.on('connect', () => {
+            if (statusEl) {
+                statusEl.innerHTML = '<span class="dot connected"></span> Connected';
+                statusEl.classList.add('connected');
+            }
+        });
+        socket.on('disconnect', () => {
+            if (statusEl) {
+                statusEl.innerHTML = '<span class="dot"></span> Disconnected';
+                statusEl.classList.remove('connected');
+            }
+        });
+
+        socket.on('state_update', (s) => {
+            if (!systemStarted) return;
+
+            fpsEl.textContent = s.fps + ' FPS';
+
+            // Enrollment overlay
+            if (!s.enrollment_complete) {
+                enrollOverlay.style.display = 'flex';
+                enrollBar.style.width = (s.enrollment_progress || 0) + '%';
+                enrollText.textContent = (s.enrollment_progress || 0) + '%';
+            } else {
+                enrollOverlay.style.display = 'none';
+            }
+
+            // Engagement ring
+            const eng = s.class_engagement || 0;
+            engRing.style.strokeDashoffset = 326.7 * (1 - eng);
+            engValue.textContent = Math.round(eng * 100) + '%';
+            if (eng >= 0.65) {
+                engRing.style.stroke = '#22c55e'; engLabel.textContent = 'Engaged';
+                engLabel.className = 'engagement-label engaged';
+            } else if (eng >= 0.40) {
+                engRing.style.stroke = '#f59e0b'; engLabel.textContent = 'Neutral';
+                engLabel.className = 'engagement-label neutral';
+            } else {
+                engRing.style.stroke = '#ef4444'; engLabel.textContent = 'Distracted';
+                engLabel.className = 'engagement-label distracted';
+            }
+
+            // Audio status
+            const aStatus = s.audio_status || 'Unknown';
+            audioText.textContent = aStatus;
+            audioBox.className = 'audio-status-box';
+            if (aStatus.includes('Teacher')) { audioIcon.textContent = '🎓'; audioBox.classList.add('teacher'); }
+            else if (aStatus.includes('Noise')) { audioIcon.textContent = '⚠️'; audioBox.classList.add('noise'); }
+            else if (aStatus.includes('Student')) { audioIcon.textContent = '🗣️'; audioBox.classList.add('student'); }
+            else { audioIcon.textContent = '🔇'; audioBox.classList.add('silence'); }
+
+            const ad = s.audio_detail || {};
+            document.getElementById('similarity-val').textContent = ad.similarity !== undefined ? ad.similarity.toFixed(3) : '—';
+            document.getElementById('noise-val').textContent = ad.noise_level !== undefined ? (ad.noise_level*100).toFixed(0)+'%' : '—';
+            document.getElementById('energy-val').textContent = ad.energy !== undefined ? ad.energy.toFixed(4) : '—';
+
+            // Students
+            const students = s.students || [];
+            studentBadge.textContent = students.length + ' student' + (students.length !== 1 ? 's' : '');
+            if (students.length === 0) {
+                studentsGrid.innerHTML = '<div class="empty-state">No students detected</div>';
+            } else {
+                studentsGrid.innerHTML = students.map(st => `
+                    <div class="student-card ${st.label.toLowerCase()}">
+                        <div class="student-header">
+                            <span class="student-id">👤 Person ${st.id}</span>
+                            <span class="student-badge ${st.label.toLowerCase()}">${st.label}</span>
+                        </div>
+                        <div class="student-score">${Math.round(st.score * 100)}%</div>
+                        <div class="student-details">
+                            <span>👁️ ${st.gaze || 'N/A'}</span>
+                            <span>👀 ${st.eyes}</span>
+                        </div>
+                        <div class="student-bar-container">
+                            <div class="student-bar" style="width:${st.score*100}%;background:${
+                                st.score>=0.65?'#22c55e':st.score>=0.40?'#f59e0b':'#ef4444'}"></div>
+                        </div>
+                    </div>`).join('');
+            }
+
+            // Chart
+            const hist = s.history || [];
+            if (hist.length > 0) {
+                chart.data.labels = hist.map((_,i) => i);
+                chart.data.datasets[0].data = hist.map(h => h.e);
+                chart.update('none');
+            }
+        });
+    </script>
+</body>
+</html>

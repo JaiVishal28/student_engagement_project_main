@@ -183,10 +183,11 @@ class SpeakerEnrollment:
                 mfcc_array = np.array(mfcc_vectors)  # shape (N, 13)
                 self.teacher_mfcc_profile = np.mean(mfcc_array, axis=0)
                 # Per-coefficient std dev — used for z-score similarity.
-                # Floor raised to 3.0 (was 1.0) so natural phoneme-to-phoneme
-                # variation in MFCC_0 (energy) and formant coefficients doesn't
-                # push the teacher's own chunks into high z-score territory.
-                self.teacher_mfcc_std = np.std(mfcc_array, axis=0) + 3.0
+                # Floor of 2.0: enough to absorb the teacher's own phoneme-to-phoneme
+                # variation (keeps self-similarity high) while being strict enough that
+                # random audio (YouTube, music) produces larger z-scores and scores
+                # well below the 0.75 threshold. Was 3.0, which was too permissive.
+                self.teacher_mfcc_std = np.std(mfcc_array, axis=0) + 2.0
                 logger.info(f"  MFCC profile built from {len(mfcc_vectors)} speech chunks")
 
         self.is_enrolled = True
