@@ -371,8 +371,14 @@ def run_video_mode(source=None, display=True, max_frames=None):
                     student_noise = current_audio_features.get('student_noise_detected', False)
                     is_teacher = current_audio_features.get('is_teacher_speaking', False)
                     sim = current_audio_features.get('teacher_similarity', 0.0)
+                    audio_status = current_audio_features.get('audio_status', 'active')
+                    speech_prob = current_audio_features.get('speech_probability', 0.0)
 
-                    if student_noise:
+                    # Silence: energy below threshold OR VAD says no speech
+                    if audio_status == 'silence' or speech_prob < 0.3:
+                        audio_txt = "MIC: Quiet"
+                        a_color = (160, 160, 160)
+                    elif student_noise:
                         noise_lvl = current_audio_features.get('student_noise_level', 0.0)
                         audio_txt = f"MIC: STUDENT NOISE ({noise_lvl*100:.0f}%)"
                         a_color = (0, 0, 220)

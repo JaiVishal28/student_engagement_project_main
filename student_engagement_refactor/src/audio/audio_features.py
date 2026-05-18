@@ -101,6 +101,8 @@ class AudioFeatureExtractor:
             'is_teacher_speaking': student_noise_info['is_teacher'] if student_noise_info else True,
             'teacher_similarity': student_noise_info.get('teacher_similarity', 1.0) if student_noise_info else 1.0,
             'similarity_threshold': student_noise_info.get('similarity_threshold', 0.65) if student_noise_info else 0.65,
+            # 'silence' when RMS below energy gate; 'teacher'/'student'/'active' otherwise
+            'audio_status': student_noise_info.get('status', 'active') if student_noise_info else 'active',
             
             # Legacy engagement indicators (kept for compatibility)
             'background_noise_level': self._background_noise_level(energy),

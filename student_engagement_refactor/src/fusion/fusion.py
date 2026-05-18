@@ -211,11 +211,17 @@ def multimodal_engagement_score(visual_features: Dict[str, Any],
         # Add interpretation help
         sim_score = audio_features.get('teacher_similarity', 0)
         spk_count = audio_features.get('speaker_count', 1)
-        if spk_count > 1:
+        a_status = audio_features.get('audio_status', 'active')
+        speech_prob = audio_features.get('speech_probability', 0.0)
+        if a_status == 'silence' or speech_prob < 0.3:
+            print(f"  🔇 Environment is QUIET (no speech detected)")
+        elif spk_count > 1:
             print(f"  🔊 MULTIPLE SPEAKERS DETECTED (count={spk_count}) → STUDENT NOISE")
-        elif sim_score > 0.25:
-            print(f"  ℹ️  Audio classified as TEACHER (similarity {sim_score:.2f} > 0.25)")
+        elif audio_features.get('is_teacher_speaking', False):
+            thr = audio_features.get('similarity_threshold', 0.65)
+            print(f"  ℹ️  Audio classified as TEACHER (similarity {sim_score:.2f} > {thr:.2f})")
         else:
-            print(f"  ⚠️  Audio classified as STUDENT/OTHER (similarity {sim_score:.2f} < 0.25)")
+            thr = audio_features.get('similarity_threshold', 0.65)
+            print(f"  ⚠️  Audio classified as STUDENT/OTHER (similarity {sim_score:.2f} < {thr:.2f})")
     
     return max(0.0, min(1.0, combined_score))
