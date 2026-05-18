@@ -13,7 +13,7 @@ YOLO_MODEL_REGISTRY = {
 
 
 class YoloDetector:
-    def __init__(self, weights_path: str, device: str = "cpu", conf: float = 0.35, iou: float = 0.45):
+    def __init__(self, weights_path: str, device: str = "cpu", conf: float = 0.35, iou: float = 0.45, imgsz: int = 640):
         """
         Unified wrapper for YOLOv8 / YOLOv9 / YOLO11.
 
@@ -25,11 +25,13 @@ class YoloDetector:
             device: 'cpu' or 'cuda' (or '0' for first GPU).
             conf: Detection confidence threshold.
             iou: NMS IoU threshold.
+            imgsz: Inference image size (shorter side). 640 = ~4x faster than 1280 on CPU.
         """
         self.model = YOLO(weights_path)
         self.device = device
         self.conf = conf
         self.iou = iou
+        self.imgsz = imgsz
         self.weights_path = weights_path
 
         # Determine model family label for reporting
@@ -48,7 +50,7 @@ class YoloDetector:
         Returns:
             List of dicts: {xmin, ymin, xmax, ymax, conf, cls}
         """
-        results = self.model(frame, device=self.device, conf=self.conf, iou=self.iou, verbose=False)
+        results = self.model(frame, device=self.device, conf=self.conf, iou=self.iou, verbose=False, imgsz=self.imgsz)
         if not results:
             return []
         res = results[0]

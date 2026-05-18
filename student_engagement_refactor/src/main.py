@@ -61,8 +61,9 @@ def run_video_mode(source=None, display=True, max_frames=None):
         detector = YoloDetector(
             weights_path,
             device=detect_cfg.get("device", "cpu"),
-            conf=detect_cfg.get("conf", 0.35),
-            iou=detect_cfg.get("iou", 0.45)
+            conf=detect_cfg.get("conf", 0.45),
+            iou=detect_cfg.get("iou", 0.50),
+            imgsz=detect_cfg.get("imgsz", 640)
         )
         
         tracker = Sort(
@@ -89,7 +90,11 @@ def run_video_mode(source=None, display=True, max_frames=None):
                 audio_capture = AudioCapture(sample_rate=16000, chunk_duration=0.5)
                 vad_detector = VADDetector(threshold=0.5, sample_rate=16000)
                 audio_extractor = AudioFeatureExtractor(baseline_duration=5.0, sample_rate=16000)
-                speaker_enrollment = SpeakerEnrollment(enrollment_duration=10.0, similarity_threshold=0.60)
+                audio_cfg = cfg.get("audio", {})
+                speaker_enrollment = SpeakerEnrollment(
+                    enrollment_duration=audio_cfg.get("enrollment_duration", 10.0),
+                    similarity_threshold=audio_cfg.get("similarity_threshold", 0.65)
+                )
                 audio_capture.start()
                 logger.info("🎤 Audio processing enabled")
                 logger.info("📝 TEACHER ENROLLMENT: Please speak for 10 seconds to record your voice profile...")
@@ -239,8 +244,8 @@ def run_video_mode(source=None, display=True, max_frames=None):
                 feats['movement'] = movement
 
                 # Compute engagement score (multimodal if audio available)
-                # Print detailed breakdown every 60 frames (~4 seconds)
-                show_breakdown = (frame_counter % 60 == 0)
+                # Print detailed breakdown every 120 frames (~8 sec) for ONE student only
+                show_breakdown = (frame_counter % 120 == 0 and t is tracks[0])
                 
                 if use_audio and current_audio_features:
                     score = multimodal_engagement_score(feats, current_audio_features, verbose=show_breakdown)
@@ -259,20 +264,46 @@ def run_video_mode(source=None, display=True, max_frames=None):
 
                 # Visualization
                 if display and display_frame is not None:
-                    # Color based on engagement
-                    color = (0, int(255 * score), int(255 * (1 - score)))  # Green to red
+                    # Engagement label + colour thresholds
+                    if score >= 0.65:
+                        label = "ENGAGED"
+                        color = (0, 220, 0)        # green
+                    elif score >= 0.40:
+                        label = "NEUTRAL"
+                        color = (0, 200, 255)      # amber/yellow
+                    else:
+                        label = "DISTRACTED"
+                        color = (0, 0, 220)        # red (BGR)
+
+                    # Bounding box — thicker for better visibility
                     cv2.rectangle(display_frame, (xmin, ymin), (xmax, ymax), color, 2)
-                    
-                    # Info text
-                    cv2.putText(display_frame, f"ID:{int(tid)} E:{score:.2f}", 
-                               (xmin, ymin - 10), cv2.FONT_HERSHEY_SIMPLEX, 
-                               0.5, (255, 255, 255), 2)
-                    
-                    # Feature details
-                    gaze_str = feats.get('gaze', 'N/A')
-                    cv2.putText(display_frame, f"Gaze:{gaze_str}", 
-                               (xmin, ymin - 30), cv2.FONT_HERSHEY_SIMPLEX, 
-                               0.4, (200, 200, 0), 1)
+
+                    # Label banner above box
+                    banner_y = max(ymin - 4, 20)
+                    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+                    cv2.rectangle(display_frame, (xmin, banner_y - th - 6), (xmin + tw + 4, banner_y + 2), color, -1)
+                    cv2.putText(display_frame, label,
+                                (xmin + 2, banner_y - 2), cv2.FONT_HERSHEY_SIMPLEX,
+                                0.55, (0, 0, 0), 2)
+
+                    # Score + ID line below label
+                    score_text = f"Person {int(tid)}: {score*100:.0f}%"
+                    cv2.putText(display_frame, score_text,
+                               (xmin, banner_y + 16), cv2.FONT_HERSHEY_SIMPLEX,
+                               0.45, color, 1)
+
+                    # Small feature detail (gaze + eye state) inside box if tall enough
+                    box_h = ymax - ymin
+                    if box_h > 80:
+                        gaze_str = feats.get('gaze') or 'N/A'
+                        eye_val = feats.get('eye_openness') or 0.0
+                        eye_str = "Open" if eye_val > 0.02 else "Closed"
+                        cv2.putText(display_frame, f"Eyes: {eye_str}",
+                                   (xmin + 4, ymin + 18), cv2.FONT_HERSHEY_SIMPLEX,
+                                   0.38, (230, 230, 230), 1)
+                        cv2.putText(display_frame, f"Gaze: {gaze_str}",
+                                   (xmin + 4, ymin + 34), cv2.FONT_HERSHEY_SIMPLEX,
+                                   0.38, (230, 230, 230), 1)
 
                 # Prepare log entry
                 log_entry = {
@@ -312,43 +343,48 @@ def run_video_mode(source=None, display=True, max_frames=None):
                     current_fps = fps_counter / (time.time() - fps_time)
                     fps_time = time.time()
                     fps_counter = 0
-                
-                # Overlay stats
-                cv2.putText(display_frame, f"FPS: {current_fps:.1f} | Frame: {frame_counter}", 
-                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                cv2.putText(display_frame, f"Tracks: {len(tracks)}", 
-                           (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                
-                # Audio status overlay (only show if enrollment complete)
+
+                # ── Top-left HUD bar ──────────────────────────────────────────
+                # Semi-transparent dark banner
+                hud_h = 70
+                hud_overlay = display_frame.copy()
+                cv2.rectangle(hud_overlay, (0, 0), (w, hud_h), (20, 20, 20), -1)
+                cv2.addWeighted(hud_overlay, 0.55, display_frame, 0.45, 0, display_frame)
+
+                cv2.putText(display_frame, f"FPS: {current_fps:.1f}",
+                           (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 120), 2)
+                cv2.putText(display_frame, f"Students detected: {len(tracks)}",
+                           (130, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 120), 2)
+
+                # Mean engagement bar
+                if rows_to_log:
+                    mean_eng = float(np.mean([r['engagement_score'] for r in rows_to_log]))
+                    bar_w = int(mean_eng * 300)
+                    bar_color = (0, 220, 0) if mean_eng >= 0.65 else (0, 200, 255) if mean_eng >= 0.40 else (0, 0, 220)
+                    cv2.rectangle(display_frame, (10, 38), (10 + 300, 58), (60, 60, 60), -1)
+                    cv2.rectangle(display_frame, (10, 38), (10 + bar_w, 58), bar_color, -1)
+                    cv2.putText(display_frame, f"Class engagement: {mean_eng*100:.0f}%",
+                               (320, 54), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1)
+
+                # ── Audio status (bottom-left) ────────────────────────────────
                 if use_audio and current_audio_features and enrollment_complete:
-                    # Standard audio metrics - handle 'unknown' strings
-                    try:
-                        noise_level = float(current_audio_features.get('background_noise_level', 0.0))
-                    except (ValueError, TypeError):
-                        noise_level = 0.0
-                    
-                    audio_status = f"Audio Noise: {noise_level:.2f}"
-                    cv2.putText(display_frame, audio_status, 
-                               (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 200), 1)
-                    
-                    # Student noise detection
                     student_noise = current_audio_features.get('student_noise_detected', False)
-                    
-                    try:
-                        student_level = float(current_audio_features.get('student_noise_level', 0.0))
-                    except (ValueError, TypeError):
-                        student_level = 0.0
-                    
                     is_teacher = current_audio_features.get('is_teacher_speaking', False)
-                    
+                    sim = current_audio_features.get('teacher_similarity', 0.0)
+
                     if student_noise:
-                        student_text = f"STUDENT NOISE: {student_level:.2f}"
-                        cv2.putText(display_frame, student_text, 
-                                   (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                        noise_lvl = current_audio_features.get('student_noise_level', 0.0)
+                        audio_txt = f"MIC: STUDENT NOISE ({noise_lvl*100:.0f}%)"
+                        a_color = (0, 0, 220)
+                    elif is_teacher:
+                        audio_txt = f"MIC: Teacher speaking  (sim={sim:.2f})"
+                        a_color = (0, 200, 100)
                     else:
-                        teacher_text = "Teacher Only" if is_teacher else "Quiet"
-                        cv2.putText(display_frame, teacher_text, 
-                                   (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                        audio_txt = f"MIC: Student/Other  (sim={sim:.2f})"
+                        a_color = (0, 140, 255)
+
+                    cv2.putText(display_frame, audio_txt,
+                               (10, h - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.55, a_color, 2)
 
                 
                 cv2.imshow("Student Engagement", display_frame)

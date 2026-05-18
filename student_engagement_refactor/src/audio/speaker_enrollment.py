@@ -176,7 +176,11 @@ class SpeakerEnrollment:
                 if s.get('mfcc_mean') is not None
             ]
             if mfcc_vectors:
-                self.teacher_mfcc_profile = np.mean(mfcc_vectors, axis=0)
+                mfcc_array = np.array(mfcc_vectors)  # shape (N, 13)
+                self.teacher_mfcc_profile = np.mean(mfcc_array, axis=0)
+                # Per-coefficient std dev — used for z-score similarity
+                # Add a floor of 1.0 to avoid near-zero std (which inflates z-scores)
+                self.teacher_mfcc_std = np.std(mfcc_array, axis=0) + 1.0
                 logger.info(f"  MFCC profile built from {len(mfcc_vectors)} speech chunks")
 
         self.is_enrolled = True
@@ -225,20 +229,26 @@ class SpeakerEnrollment:
         if not self.is_enrolled or not self.teacher_profile:
             return 0.0
 
-        # ── Primary: MFCC cosine similarity ─────────────────────────────────
+        # ── Primary: z-score based MFCC matching ────────────────────────────
+        # Cosine similarity is unsuitable here — it scores ALL human speech > 0.9
+        # because MFCC mean vectors share the same statistical shape for any speaker.
+        # Instead we measure how many std-devs each coefficient deviates from the
+        # teacher's enrollment distribution.  Same speaker → small z-scores (~0-1).
+        # Different speaker → large z-scores (~3-6 for most coefficients).
         if (
             HAS_LIBROSA
             and self.teacher_mfcc_profile is not None
+            and hasattr(self, 'teacher_mfcc_std')
             and current_features.get('mfcc_mean') is not None
         ):
-            dot = float(np.dot(current_features['mfcc_mean'], self.teacher_mfcc_profile))
-            norm = (
-                np.linalg.norm(current_features['mfcc_mean'])
-                * np.linalg.norm(self.teacher_mfcc_profile)
-                + 1e-10
-            )
-            # Raw cosine is in [-1, 1]; clip to [0, 1] — voice comparisons are always ≥ 0
-            return float(max(0.0, dot / norm))
+            z_scores = np.abs(
+                current_features['mfcc_mean'] - self.teacher_mfcc_profile
+            ) / self.teacher_mfcc_std  # per-coefficient normalised distance
+            mean_z = float(np.mean(z_scores))
+            # Convert to [0,1]: z≈0 → 1.0 (identical), z≈4 → ~0.14 (very different)
+            # Scale factor 2.0 chosen so teacher's own variation (mean_z ~0.5) → ~0.78
+            similarity = float(np.exp(-mean_z / 2.0))
+            return similarity
 
         # ── Fallback: spectral comparison with realistic tolerances ──────────
         # Natural speech for 1 speaker varies ±1000Hz in centroid → use 1500Hz tolerance
@@ -340,6 +350,7 @@ class SpeakerEnrollment:
             'noise_level': float(noise_level),
             'is_teacher': is_teacher,
             'teacher_similarity': float(teacher_similarity),
+            'similarity_threshold': float(self.similarity_threshold),
             'confidence': float(teacher_similarity if is_teacher else 1.0 - teacher_similarity),
             'status': 'active',
             'speaker_count': speaker_count,

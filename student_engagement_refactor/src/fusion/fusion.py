@@ -199,8 +199,8 @@ def multimodal_engagement_score(visual_features: Dict[str, Any],
         print(f"    Audio Score:    {audio_score:.3f}  ← High = quiet environment")
         print(f"    Student Noise:  {audio_features.get('student_noise_detected', False)}  ← True = students talking")
         print(f"    Noise Level:    {audio_features.get('student_noise_level', 0):.3f}  ← 0=quiet, 1=loud")
-        print(f"    Is Teacher:     {audio_features.get('is_teacher_speaking', False)}  ← Similarity > 0.25")
-        print(f"    Similarity:     {audio_features.get('teacher_similarity', 0):.3f}  ← Threshold=0.25, Speaker Count={audio_features.get('speaker_count', 1)}")
+        print(f"    Is Teacher:     {audio_features.get('is_teacher_speaking', False)}  ← Similarity above threshold")
+        print(f"    Similarity:     {audio_features.get('teacher_similarity', 0):.3f}  ← z-score metric (threshold={audio_features.get('similarity_threshold', 0.65):.2f}), Speaker Count={audio_features.get('speaker_count', 1)}")
         print(f"  ──────────────")
         print(f"  Base Score:     {(visual_weight * visual_score) + (audio_weight * audio_score):.3f}")
         if modulations:

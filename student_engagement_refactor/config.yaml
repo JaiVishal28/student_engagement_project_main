@@ -8,17 +8,18 @@ detection:
   # Supported variants: yolov8s.pt | yolov9s.pt | yolo11s.pt
   # Ultralytics auto-downloads the file if not present locally.
   weights: "yolov8s.pt"
-  conf: 0.20          # Lowered from 0.35 - detects more students
-  iou: 0.45
+  conf: 0.45          # Raised from 0.20 - reduces false-positive ghost detections
+  iou: 0.50           # Slightly tighter NMS
+  imgsz: 640          # Run YOLO inference at 640px (4x fewer pixels → much faster on CPU)
   device: "cpu"
 
 tracking:
-  max_age: 60         # Keep lost tracks for 60 frames (2 seconds at 30fps)
-  min_hits: 2         # Lowered from 5 - assign IDs faster, less false negatives
-  iou_threshold: 0.25 # Lower threshold = more lenient matching
+  max_age: 30         # Drop lost tracks faster (was 60) - avoids zombie IDs
+  min_hits: 3         # Require 3 consecutive frames before assigning an ID (was 2)
+  iou_threshold: 0.30 # Slightly stricter matching
 
 processing:
-  process_every_n_frames: 1  # Process EVERY frame (was 3) - no skipping!
+  process_every_n_frames: 3  # Skip 2/3 frames - critical for real-time on CPU
   face_padding: 12
   pose_padding: 12
 
@@ -30,13 +31,7 @@ audio:
   sample_rate: 16000
   chunk_duration: 0.5
   vad_threshold: 0.5
-  baseline_duration: 5.0
-  noise_threshold: 0.03
-  enable_audio: true
-
-audio:
-  sample_rate: 16000
-  chunk_duration: 0.5
-  vad_threshold: 0.5
   baseline_duration: 5.0  # seconds to establish teacher voice baseline
   noise_threshold: 0.03
+  enrollment_duration: 10.0
+  similarity_threshold: 0.65  # Threshold for z-score MFCC speaker similarity
