@@ -34,4 +34,4 @@ audio:
   baseline_duration: 5.0  # seconds to establish teacher voice baseline
   noise_threshold: 0.03
   enrollment_duration: 10.0
-  similarity_threshold: 0.65  # Threshold for z-score MFCC speaker similarity
+  similarity_threshold: 0.45  # Threshold for z-score MFCC speaker similarity (scale=3.0)

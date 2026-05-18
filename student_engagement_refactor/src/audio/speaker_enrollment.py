@@ -245,9 +245,11 @@ class SpeakerEnrollment:
                 current_features['mfcc_mean'] - self.teacher_mfcc_profile
             ) / self.teacher_mfcc_std  # per-coefficient normalised distance
             mean_z = float(np.mean(z_scores))
-            # Convert to [0,1]: z≈0 → 1.0 (identical), z≈4 → ~0.14 (very different)
-            # Scale factor 2.0 chosen so teacher's own variation (mean_z ~0.5) → ~0.78
-            similarity = float(np.exp(-mean_z / 2.0))
+            # Convert to [0,1]: z≈0 → 1.0 (identical), large z → near 0
+            # Scale factor 3.0: teacher's natural variation (mean_z ~1.0-1.6)
+            # scores 0.59-0.72; a genuinely different speaker (mean_z ~3-5)
+            # scores 0.19-0.37, well below the 0.45 threshold.
+            similarity = float(np.exp(-mean_z / 3.0))
             return similarity
 
         # ── Fallback: spectral comparison with realistic tolerances ──────────
