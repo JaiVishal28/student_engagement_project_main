@@ -4,19 +4,22 @@ capture:
   height: 720
 
 detection:
-  weights: "yolov8s.pt"
-  conf: 0.45
-  iou: 0.50
-  imgsz: 640
+  weights: "yolov8n.pt"
+  conf: 0.50        # lower than 0.60 to catch partially-visible / distant people
+  iou: 0.45
+  imgsz: 480        # slightly larger input → better detail for smaller persons
   device: "cpu"
+  min_area: 4000    # thumbnail faces ~< 3000 px²; real seated people ~> 4000 px²
+  max_dets: 12      # allow up to 12 simultaneous detections
 
 tracking:
-  max_age: 30
-  min_hits: 3
+  max_age: 5
+  min_hits: 2
   iou_threshold: 0.30
+  max_centroid_dist: 120
 
 processing:
-  process_every_n_frames: 3
+  process_every_n_frames: 4
 
 audio:
   sample_rate: 16000

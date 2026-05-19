@@ -59,15 +59,57 @@ def init_csv():
         with open(csv_path, 'w', newline='') as f:
             csv.writer(f).writerow(csv_columns)
 
+_csv_queue = []
+_csv_lock = threading.Lock()
+
 def log_csv(rows):
-    try:
-        with open(csv_path, 'a', newline='') as f:
-            w = csv.writer(f)
-            for r in rows:
-                w.writerow([datetime.datetime.now().isoformat()] + [r.get(c, '') for c in csv_columns[1:]])
-            f.flush(); os.fsync(f.fileno())
-    except:
-        pass
+    """Non-blocking: queue rows for background writer."""
+    with _csv_lock:
+        _csv_queue.extend(rows)
+
+def _csv_writer_thread():
+    """Background thread that flushes CSV queue every 5 s to avoid I/O stalls."""
+    while True:
+        time.sleep(5)
+        with _csv_lock:
+            if not _csv_queue:
+                continue
+            batch = _csv_queue[:]
+            _csv_queue.clear()
+        try:
+            with open(csv_path, 'a', newline='') as f:
+                w = csv.writer(f)
+                for r in batch:
+                    w.writerow([datetime.datetime.now().isoformat()] + [r.get(c, '') for c in csv_columns[1:]])
+        except Exception as exc:
+            log.warning(f"CSV write error: {exc}")
+
+class ThreadedCamera:
+    def __init__(self, src=0, width=1280, height=720):
+        self.cap = cv2.VideoCapture(src)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        self.ret, self.frame = self.cap.read()
+        self.running = True
+        self.thread = threading.Thread(target=self._update, daemon=True)
+        self.thread.start()
+
+    def _update(self):
+        while self.running:
+            ret, frame = self.cap.read()
+            if ret:
+                self.ret = ret
+                self.frame = frame
+            else:
+                time.sleep(0.01)
+
+    def read(self):
+        return self.ret, self.frame
+
+    def release(self):
+        self.running = False
+        self.thread.join()
+        self.cap.release()
 
 # ─── Detection Pipeline (runs in background thread) ────────────────────────
 def pipeline():
@@ -76,9 +118,7 @@ def pipeline():
 
     # Init camera
     src = cap_cfg.get("source", 0)
-    cap = cv2.VideoCapture(src)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, cap_cfg.get("width", 1280))
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cap_cfg.get("height", 720))
+    cap = ThreadedCamera(src, cap_cfg.get("width", 1280), cap_cfg.get("height", 720))
 
     # Init detector & tracker
     weights = det_cfg.get("weights", "yolov8s.pt")
@@ -88,8 +128,12 @@ def pipeline():
         if parent_weights.exists():
             weights = str(parent_weights)
     detector = Detector(weights, det_cfg.get("device","cpu"),
-                        det_cfg.get("conf",0.45), det_cfg.get("iou",0.50), det_cfg.get("imgsz",640))
-    tracker = Tracker(trk_cfg.get("max_age",30), trk_cfg.get("min_hits",3), trk_cfg.get("iou_threshold",0.3))
+                        det_cfg.get("conf",0.60), det_cfg.get("iou",0.50), det_cfg.get("imgsz",416),
+                        min_area=det_cfg.get("min_area", 8000),
+                        max_dets=det_cfg.get("max_dets", 10))
+    tracker = Tracker(trk_cfg.get("max_age", 5), trk_cfg.get("min_hits", 2),
+                      trk_cfg.get("iou_threshold", 0.30),
+                      max_centroid_dist=trk_cfg.get("max_centroid_dist", 120))
 
     # Init audio
     audio_cap = None; vad = None; audio_ext = None; enrollment = None
@@ -108,13 +152,24 @@ def pipeline():
         log.warning(f"Audio disabled: {e}")
 
     init_csv()
-    process_n = proc_cfg.get("process_every_n_frames", 3)
+    # Start background CSV writer
+    csv_thread = threading.Thread(target=_csv_writer_thread, daemon=True)
+    csv_thread.start()
+
     frame_cnt = 0; fps_time = time.time(); fps_cnt = 0; current_fps = 0
-    last_dets = []; movement_buf = {}
+    movement_buf = {}; feat_cache = {}
     state["running"] = True
     history_time = time.time()
+    _pipeline_fps_cap = 1.0 / 35  # cap pipeline at ~35 fps to stay non-blocking
 
+    _last_loop = time.time()
     while state["running"]:
+        # Pace the loop — prevents spinning and starving the streamer thread
+        elapsed = time.time() - _last_loop
+        if elapsed < _pipeline_fps_cap:
+            time.sleep(_pipeline_fps_cap - elapsed)
+        _last_loop = time.time()
+
         ret, frame = cap.read()
         if not ret:
             time.sleep(0.01); continue
@@ -153,18 +208,26 @@ def pipeline():
             continue
 
         # ── Detection ──
-        if frame_cnt % process_n == 0:
-            last_dets = detector.detect(frame)
-
+        last_dets = detector.detect(frame)
         tracks = tracker.update(last_dets)
 
         # ── Process tracks ──
         students = []; csv_rows = []
         display = frame.copy()
 
-        for t in tracks:
+        # Sort tracks left-to-right so Student 1 is always the leftmost person
+        tracks_sorted = sorted(tracks, key=lambda t: t[0])  # sort by xmin
+
+        for display_idx, t in enumerate(tracks_sorted):
             xmin, ymin, xmax, ymax, tid = [int(x) for x in t]
-            feats = extract_visual(frame, [xmin,ymin,xmax,ymax], w, h)
+            sid = display_idx + 1  # sequential display ID: 1, 2, 3...
+
+            # MediaPipe extraction — cache by internal tid for smoothing
+            if frame_cnt % 2 == tid % 2:
+                feats = extract_visual(frame, [xmin,ymin,xmax,ymax], w, h)
+                feat_cache[tid] = feats
+            else:
+                feats = feat_cache.get(tid, extract_visual(frame, [xmin,ymin,xmax,ymax], w, h))
 
             # Movement
             cx, cy = (xmin+xmax)/2, (ymin+ymax)/2
@@ -189,22 +252,22 @@ def pipeline():
             else:
                 label, color = "DISTRACTED", (0,0,220)
 
-            # Draw on frame
+            # Draw on frame — use sequential display ID
             cv2.rectangle(display, (xmin,ymin), (xmax,ymax), color, 2)
             by = max(ymin-4, 20)
             (tw,th),_ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
             cv2.rectangle(display, (xmin, by-th-6), (xmin+tw+4, by+2), color, -1)
             cv2.putText(display, label, (xmin+2, by-2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0,0,0), 2)
-            cv2.putText(display, f"ID {tid}: {score*100:.0f}%", (xmin, by+16),
+            cv2.putText(display, f"S{sid}: {score*100:.0f}%", (xmin, by+16),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
 
             students.append({
-                "id": int(tid), "score": round(score, 3), "label": label,
+                "id": sid, "score": round(score, 3), "label": label,
                 "gaze": feats.get('gaze', 'N/A'),
                 "eyes": "Open" if (feats.get('eye_openness') or 0) > 0.02 else "Closed"
             })
             csv_rows.append({
-                'student_id': int(tid), 'engagement_score': round(score,3),
+                'student_id': sid, 'engagement_score': round(score,3),
                 'gaze': feats.get('gaze'), 'eye_openness': feats.get('eye_openness',0),
                 'head_pitch': feats.get('head_pitch',0), 'movement': movement,
                 'audio_energy': audio_features.get('audio_energy',0),
@@ -309,14 +372,22 @@ def api_state():
     return jsonify(_sanitize(state))
 
 def gen_frames():
+    """MJPEG stream capped at 30 FPS to avoid flooding the browser."""
+    _target_interval = 1.0 / 30  # 30 FPS cap
+    _last_sent = 0.0
     while True:
+        now = time.time()
+        wait = _target_interval - (now - _last_sent)
+        if wait > 0:
+            time.sleep(wait)
         with frame_lock:
             f = latest_frame[0]
         if f is not None:
-            _, buf = cv2.imencode('.jpg', f, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            _, buf = cv2.imencode('.jpg', f, [cv2.IMWRITE_JPEG_QUALITY, 75])
             yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            _last_sent = time.time()
         else:
-            time.sleep(0.05)
+            time.sleep(0.033)
 
 @app.route('/video_feed')
 def video_feed():

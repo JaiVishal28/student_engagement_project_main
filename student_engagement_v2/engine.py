@@ -7,7 +7,6 @@ import time
 import logging
 from math import atan2, degrees
 from scipy.optimize import linear_sum_assignment
-from filterpy.kalman import KalmanFilter
 from ultralytics import YOLO
 
 log = logging.getLogger("engine")
@@ -19,8 +18,14 @@ try:
         mp_face = mp.solutions.face_mesh
         mp_pose = mp.solutions.pose
         face_model = mp_face.FaceMesh(static_image_mode=False, max_num_faces=1,
-                                       refine_landmarks=True, min_detection_confidence=0.5)
-        pose_model = mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.5)
+                                       refine_landmarks=False,
+                                       min_detection_confidence=0.5,
+                                       min_tracking_confidence=0.5)
+        pose_model = mp_pose.Pose(static_image_mode=False,
+                                   model_complexity=0,
+                                   smooth_landmarks=True,
+                                   min_detection_confidence=0.5,
+                                   min_tracking_confidence=0.5)
         USE_MP = True
     else:
         USE_MP = False
@@ -35,7 +40,8 @@ face_cascade = cv2.CascadeClassifier(cascade_path)
 
 # ─── YOLO Detector ──────────────────────────────────────────────────────────
 class Detector:
-    def __init__(self, weights="yolov8n.pt", device=None, conf=0.45, iou=0.50, imgsz=640):
+    def __init__(self, weights="yolov8n.pt", device=None, conf=0.45, iou=0.50, imgsz=640,
+                 min_area=8000, max_dets=12):
         if device is None:
             import torch
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -44,21 +50,36 @@ class Detector:
         self.conf = conf
         self.iou = iou
         self.imgsz = imgsz
+        self.min_area = min_area   # ignore tiny boxes (thumbnails, reflections)
+        self.max_dets = max_dets   # hard cap on simultaneous detections
 
     def detect(self, frame):
         results = self.model(frame, device=self.device, conf=self.conf,
                              iou=self.iou, verbose=False, imgsz=self.imgsz)
         out = []
         if results and hasattr(results[0], "boxes"):
+            boxes = []
             for box in results[0].boxes:
                 xyxy = box.xyxy[0].cpu().numpy()
-                cls = int(box.cls[0].cpu().numpy())
-                if cls == 0:  # person only
-                    out.append([int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])])
+                cls  = int(box.cls[0].cpu().numpy())
+                conf = float(box.conf[0].cpu().numpy())
+                if cls != 0:
+                    continue
+                x1, y1, x2, y2 = int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])
+                area = (x2 - x1) * (y2 - y1)
+                if area < self.min_area:
+                    continue   # skip tiny detections (thumbnail faces etc.)
+                boxes.append((conf, [x1, y1, x2, y2]))
+            # Sort by confidence descending and cap
+            boxes.sort(key=lambda b: b[0], reverse=True)
+            out = [b[1] for b in boxes[:self.max_dets]]
         return out
 
 
-# ─── SORT Tracker ───────────────────────────────────────────────────────────
+# ─── Robust Centroid Tracker (replaces SORT) ────────────────────────────────
+# Two-pass matching: IoU first, then centroid-distance fallback.
+# IDs are reused when a person reappears within max_age frames — no ghost ID inflation.
+
 def _iou(a, b):
     x1 = max(a[0], b[0]); y1 = max(a[1], b[1])
     x2 = min(a[2], b[2]); y2 = min(a[3], b[3])
@@ -67,56 +88,77 @@ def _iou(a, b):
     area_b = (b[2]-b[0])*(b[3]-b[1])
     return inter / (area_a + area_b - inter + 1e-6)
 
-class _Track:
-    def __init__(self, bbox, tid):
-        self.bbox = bbox; self.id = tid; self.hits = 1; self.no_losses = 0
-        self.kf = KalmanFilter(dim_x=7, dim_z=4)
-        self.kf.F = np.array([[1,0,0,0,1,0,0],[0,1,0,0,0,1,0],[0,0,1,0,0,0,1],
-                              [0,0,0,1,0,0,0],[0,0,0,0,1,0,0],[0,0,0,0,0,1,0],[0,0,0,0,0,0,1]])
-        self.kf.H = np.array([[1,0,0,0,0,0,0],[0,1,0,0,0,0,0],[0,0,1,0,0,0,0],[0,0,0,1,0,0,0]])
-        self.kf.P *= 10.; self.kf.R *= 1.
-        self.kf.x[:4] = np.array(bbox).reshape((4,1))
-
-    def predict(self):
-        self.kf.predict()
-        self.bbox = [int(x) for x in self.kf.x[:4].reshape((4,))]
-        return self.bbox
-
-    def update(self, bbox):
-        self.kf.update(np.array(bbox).reshape((4,1)))
-        self.bbox = bbox; self.hits += 1; self.no_losses = 0
-
 class Tracker:
-    def __init__(self, max_age=5, min_hits=2, iou_threshold=0.15):
-        self.max_age = max_age; self.min_hits = min_hits
+    def __init__(self, max_age=5, min_hits=2, iou_threshold=0.25, max_centroid_dist=120):
+        self.max_age = max_age
+        self.min_hits = min_hits
         self.iou_threshold = iou_threshold
-        self.tracks = []; self.frame_count = 0; self.next_id = 0
+        self.max_cd = max_centroid_dist
+        self.tracks = []       # list of dicts: {bbox, id, hits, age}
+        self.frame_count = 0
+        self.next_id = 0
+
+    @staticmethod
+    def _centroid(bbox):
+        return ((bbox[0]+bbox[2])/2, (bbox[1]+bbox[3])/2)
+
+    @staticmethod
+    def _cdist(a, b):
+        return ((a[0]-b[0])**2 + (a[1]-b[1])**2) ** 0.5
 
     def update(self, dets):
         self.frame_count += 1
-        preds = [t.predict() for t in self.tracks]
-        # Associate
-        matched, um_dets, um_trks = [], list(range(len(dets))), list(range(len(preds)))
-        if preds:
-            iou_mat = np.zeros((len(dets), len(preds)))
-            for d in range(len(dets)):
-                for t in range(len(preds)):
-                    iou_mat[d,t] = _iou(dets[d], preds[t])
+
+        # Pass 1: IoU-based Hungarian matching
+        matched_d, matched_t = set(), set()
+        if self.tracks and dets:
+            iou_mat = np.zeros((len(dets), len(self.tracks)))
+            for d, det in enumerate(dets):
+                for t, trk in enumerate(self.tracks):
+                    iou_mat[d, t] = _iou(det, trk['bbox'])
             ri, ci = linear_sum_assignment(-iou_mat)
             for d, t in zip(ri, ci):
-                if iou_mat[d,t] >= self.iou_threshold:
-                    matched.append((d,t)); um_dets.remove(d); um_trks.remove(t)
-        for d, t in matched:
-            self.tracks[t].update(dets[d])
-        for i in um_dets:
-            self.tracks.append(_Track(dets[i], self.next_id)); self.next_id += 1
-        to_del = [self.tracks[i] for i in um_trks if (self.tracks[i].no_losses + 1) > self.max_age]
-        for t in um_trks:
-            self.tracks[t].no_losses += 1
-        for t in to_del:
-            self.tracks.remove(t)
-        return [(*t.bbox, t.id) for t in self.tracks
-                if t.hits >= self.min_hits or self.frame_count <= self.min_hits]
+                if iou_mat[d, t] >= self.iou_threshold:
+                    matched_d.add(d); matched_t.add(t)
+                    self.tracks[t]['bbox'] = dets[d]
+                    self.tracks[t]['hits'] += 1
+                    self.tracks[t]['age'] = 0
+
+        # Pass 2: centroid-distance fallback for low-FPS positional drift
+        unmatched_d = [d for d in range(len(dets)) if d not in matched_d]
+        unmatched_t = [t for t in range(len(self.tracks)) if t not in matched_t]
+        still_unmatched_d = []
+        for d in unmatched_d:
+            dc = self._centroid(dets[d])
+            best_dist, best_t = float('inf'), -1
+            for t in unmatched_t:
+                dist = self._cdist(dc, self._centroid(self.tracks[t]['bbox']))
+                if dist < best_dist:
+                    best_dist, best_t = dist, t
+            if best_t != -1 and best_dist < self.max_cd:
+                self.tracks[best_t]['bbox'] = dets[d]
+                self.tracks[best_t]['hits'] += 1
+                self.tracks[best_t]['age'] = 0
+                unmatched_t.remove(best_t)
+            else:
+                still_unmatched_d.append(d)
+
+        # Spawn new tracks for truly unmatched detections
+        for d in still_unmatched_d:
+            self.tracks.append({'bbox': dets[d], 'id': self.next_id, 'hits': 1, 'age': 0})
+            self.next_id += 1
+
+        # Age unmatched tracks and prune dead ones
+        for t in unmatched_t:
+            self.tracks[t]['age'] += 1
+        self.tracks = [tr for tr in self.tracks if tr['age'] <= self.max_age]
+
+        # Return only confirmed tracks
+        return [
+            (*tr['bbox'], tr['id'])
+            for tr in self.tracks
+            if tr['hits'] >= self.min_hits or self.frame_count <= self.min_hits
+        ]
 
 
 # ─── Visual Features ───────────────────────────────────────────────────────
